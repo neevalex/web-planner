@@ -43,14 +43,22 @@ for (const group of Object.values(pdef)) {
     if (m.Units) e.u = m.Units;
     if (m.Range) e.r = [Number(m.Range.low), Number(m.Range.high)];
     if (m.Increment) e.i = Number(m.Increment);
-    if (m.Values) e.v = Object.fromEntries(Object.entries(m.Values).sort((a, b) => Number(a[0]) - Number(b[0])));
-    if (m.Bitmask) e.b = Object.fromEntries(Object.entries(m.Bitmask).sort((a, b) => Number(a[0]) - Number(b[0])));
+    // Some params are documented by several backends (e.g. analog and AD7091R5 battery monitors);
+    // the last one wins in apm.pdef.json, so strip backend-specific wording.
+    if (e.n) e.n = clean(e.n);
+    if (e.d) e.d = clean(e.d);
+    if (m.Values && Object.keys(m.Values).length) e.v = Object.fromEntries(Object.entries(m.Values).sort((a, b) => Number(a[0]) - Number(b[0])));
+    if (m.Bitmask && Object.keys(m.Bitmask).length) e.b = Object.fromEntries(Object.entries(m.Bitmask).sort((a, b) => Number(a[0]) - Number(b[0])));
     if (m.RebootRequired === 'True') e.rb = 1;
     if (m.ReadOnly === 'True') e.ro = 1;
     if (m.User === 'Advanced') e.adv = 1;
     params[name] = e;
   }
 }
+}
+
+function clean(t) {
+  return t.replace(/\s+(on the |on )?AD7091R5( Ic)?/g, '').replace(/\s{2,}/g, ' ').trim();
 }
 
 const out = { vehicle, sources, generated: new Date().toISOString().slice(0, 10), params };

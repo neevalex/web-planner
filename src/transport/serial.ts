@@ -25,6 +25,9 @@ export class SerialTransport extends Transport {
 
   constructor(private baudRate: number, private existingPort?: SerialPort) { super(); }
 
+  /** USB ids of the open port, used to find it again for auto-connect. */
+  get usbInfo() { const i = this.port?.getInfo(); return { vid: i?.usbVendorId, pid: i?.usbProductId, baud: this.baudRate }; }
+
   /** Must be called from a user gesture (click) when no port was passed in. */
   async open(): Promise<void> {
     this.port = this.existingPort ?? await navigator.serial.requestPort();
@@ -77,6 +80,15 @@ export class SerialTransport extends Transport {
     try { await this.port?.close(); } catch { /* ignore */ }
     this.port = null;
   }
+}
+
+export interface RememberedPort { vid?: number; pid?: number; baud: number }
+
+/** A previously granted port matching the remembered USB ids (no user gesture needed). */
+export async function findRememberedPort(r: RememberedPort): Promise<SerialPort | null> {
+  const ports = await grantedPorts();
+  const match = ports.find((p) => { const i = p.getInfo(); return r.vid !== undefined && i.usbVendorId === r.vid && i.usbProductId === r.pid; });
+  return match ?? (ports.length === 1 && r.vid === undefined ? ports[0] : null);
 }
 
 export async function grantedPorts(): Promise<SerialPort[]> {

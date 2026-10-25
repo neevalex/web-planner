@@ -2,7 +2,8 @@
 // staged changes with verified writes, .param file load/compare/save.
 
 import { formatValue, isIntType, sameValue, type Param } from '../../vehicle/params';
-import { loadParamMeta, prettyUnit, type ParamMeta } from '../../vehicle/paramMeta';
+import { prettyUnit, type ParamMeta } from '../../vehicle/paramMeta';
+import type { Staging } from '../staging';
 import type { Vehicle } from '../../vehicle/vehicle';
 import { confirmDialog, modal } from '../dialog';
 import { clear, debounce, download, h, pickFile, storage } from '../dom';
@@ -31,15 +32,12 @@ const byGroupName = (a: string, b: string) => (a === GENERAL ? 1 : 0) - (b === G
 
 export class ParamsView {
   readonly el: HTMLElement;
-  private meta: Record<string, ParamMeta> = {};
-  private metaFor = '';
-  private pending = new Map<string, number>();
-  private rebootNeeded = new Set<string>();
+  private get meta(): Record<string, ParamMeta> { return this.staging.meta.meta; }
+  private get pending() { return this.staging.pending; }
   private rows = new Map<string, Row>();
   private group = storage.get<string>('params.group', ALL);
   private query = '';
   private standardOnly = storage.get('params.standardOnly', false);
-  private writing = false;
   private singles = new Set<string>();
   private singlesFor = -1;
 
@@ -62,12 +60,10 @@ export class ParamsView {
   private empty = h('div', { class: 'pempty' });
   private progress = h('div', { class: 'pprogress', hidden: true });
   private countText = h('span', { class: 'pcount' });
-  private tray = h('div', { class: 'tray', hidden: true });
-  private rebootBar = h('div', { class: 'reboot-bar', hidden: true });
   private search: HTMLInputElement;
   private renderSoon = debounce(() => this.render(), 120);
 
-  constructor(private vehicle: Vehicle) {
+  constructor(private vehicle: Vehicle, private staging: Staging) {
     this.search = h('input', {
       class: 'psearch-input', type: 'search', placeholder: 'Search name or description', 'aria-label': 'Search parameters',
       spellcheck: false, autocomplete: 'off',
@@ -93,9 +89,8 @@ export class ParamsView {
     );
 
     this.el = h('section', { class: 'view params-view', 'aria-label': 'Parameters' },
-      toolbar, this.rebootBar,
+      toolbar,
       h('div', { class: 'pbody' }, this.groupList, h('div', { class: 'pmain' }, this.progress, this.empty, this.list)),
-      this.tray,
     );
 
     // Keyboard: "/" focuses search
@@ -107,11 +102,12 @@ export class ParamsView {
     });
 
     vehicle.params.onUpdate(() => this.onParamsUpdate());
-    vehicle.store.subscribe((s) => {
-      if (s.vehicleClass !== 'unknown' && s.vehicleClass !== this.metaFor) {
-        this.metaFor = s.vehicleClass;
-        void loadParamMeta(s.vehicleClass).then((m) => { this.meta = m; this.rows.clear(); this.render(); });
-      }
+    staging.meta.onLoad(() => { this.rows.clear(); this.render(); });
+    staging.onChange((names) => {
+      if (names) for (const n of names) this.syncName(n);
+      else for (const n of this.rows.keys()) this.syncName(n);
+      this.renderGroups();
+      if (this.group === MODIFIED && !this.pending.size && !staging.writing) { this.group = ALL; this.render(); }
     });
     this.render();
   }
@@ -119,6 +115,7 @@ export class ParamsView {
   // ---------- data updates ----------
 
   private lastCount = -1;
+  private loggedLoad = -1;
   private onParamsUpdate() {
     const pm = this.vehicle.params;
     const p = pm.progress;
@@ -134,9 +131,11 @@ export class ParamsView {
     } else {
       this.progress.hidden = true;
       if (p.error && this.lastCount !== -2) { toast(p.error, 'warn'); this.lastCount = -2; }
+      if (p.total && this.loggedLoad !== p.total) { this.loggedLoad = p.total; this.vehicle.log(`Read ${p.received} of ${p.total} parameters${p.error ? ` — ${p.error}` : ''}`, p.error ? 4 : 6); }
     }
     if (pm.params.size === 0) {
-      if (this.rows.size) { this.rows.clear(); this.pending.clear(); this.renderTray(); }
+      this.loggedLoad = -1;
+      if (this.rows.size) this.rows.clear();
       this.render();
       return;
     }
@@ -283,7 +282,7 @@ export class ParamsView {
     const current = h('span', { class: 'pcurrent' });
     const nameBtn = h('button', { type: 'button', class: 'pname', 'aria-expanded': 'false', title: 'Show details' },
       h('span', { class: 'pid' }, icon('chevron', 14), p.name),
-      h('span', { class: 'pdisplay' }, m?.n ?? (Object.keys(this.meta).length ? 'Undocumented' : '')),
+      h('span', { class: 'pdisplay' }, m?.n ?? (this.staging.meta.loaded ? 'Undocumented' : '')),
     );
     const el = h('div', { class: 'prow', role: 'listitem', dataset: { name: p.name } },
       nameBtn,
@@ -327,7 +326,7 @@ export class ParamsView {
     });
     input.addEventListener('input', () => onEdit(input.value));
     input.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') { this.pending.delete(p.name); this.afterStage(p.name); input.blur(); }
+      if (e.key === 'Escape') { this.staging.unstage(p.name); input.blur(); }
       if (e.key === 'Enter') input.blur();
       if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !m?.ro) {
         e.preventDefault();
@@ -389,20 +388,21 @@ export class ParamsView {
   }
 
   private stage(name: string, raw: string) {
-    const p = this.vehicle.params.get(name);
-    if (!p) return;
     const v = raw.trim() === '' ? NaN : Number(raw.replace(',', '.'));
-    if (Number.isFinite(v) && sameValue(v, p.value)) this.pending.delete(name);
-    else this.pending.set(name, v);
-    this.afterStage(name);
+    this.staging.stage(name, v);
   }
 
-  private afterStage(name: string) {
+  private syncName(name: string) {
     const row = this.rows.get(name);
     const p = this.vehicle.params.get(name);
     if (row && p) this.syncRow(name, row, p);
-    this.renderTray();
-    this.renderGroups();
+  }
+
+  /** Shows only staged changes (used by the tray's Review button). */
+  showModified() {
+    if (!this.pending.size) return;
+    this.group = MODIFIED; this.query = ''; this.search.value = '';
+    this.render();
   }
 
   // ---------- details panel ----------
@@ -452,107 +452,12 @@ export class ParamsView {
       h('dl', { class: 'pfacts' }, facts.map(([k, v]) => [h('dt', null, k), h('dd', null, v)])),
       bits, values,
       h('div', { class: 'pdetails-actions' },
-        this.pending.has(name) ? h('button', { class: 'btn btn-small', type: 'button', onclick: () => { this.pending.delete(name); this.afterStage(name); } }, icon('undo', 16), h('span', null, 'Undo change')) : null,
+        this.pending.has(name) ? h('button', { class: 'btn btn-small', type: 'button', onclick: () => this.staging.unstage(name) }, icon('undo', 16), h('span', null, 'Undo change')) : null,
         h('button', { class: 'btn btn-small', type: 'button', onclick: async () => {
           try { await this.vehicle.params.refresh(name); toast(`${name} re-read from vehicle`, 'ok', 1500); } catch { toast(`No reply for ${name}`, 'warn'); }
         } }, icon('reread', 16), h('span', null, 'Re-read')),
       ),
     );
-  }
-
-  // ---------- write tray ----------
-
-  private renderTray() {
-    const n = this.pending.size;
-    this.tray.hidden = n === 0;
-    if (!n) return;
-    const invalid = [...this.pending].filter(([name, v]) => {
-      const p = this.vehicle.params.get(name);
-      return !p || !Number.isFinite(v) || (isIntType(p.type) && !Number.isInteger(v));
-    });
-    const outOfRange = [...this.pending].filter(([name, v]) => {
-      const r = this.meta[name]?.r;
-      return r && Number.isFinite(v) && (v < r[0] || v > r[1]);
-    });
-    clear(this.tray,
-      h('span', { class: 'tray-dot', 'aria-hidden': 'true' }),
-      h('div', { class: 'tray-text' },
-        h('strong', null, `${n} unsaved change${n === 1 ? '' : 's'}`),
-        invalid.length ? h('span', { class: 'tray-warn' }, icon('warn', 14), `${invalid.length} not a valid number`) :
-          outOfRange.length ? h('span', { class: 'tray-warn' }, icon('warn', 14), `${outOfRange.length} outside documented range`) : null,
-      ),
-      h('button', { class: 'btn', type: 'button', onclick: () => { this.group = MODIFIED; this.query = ''; this.search.value = ''; this.render(); } }, icon('review'), h('span', null, 'Review')),
-      h('button', { class: 'btn', type: 'button', disabled: this.writing, onclick: async () => {
-        if (await confirmDialog('Discard changes?', `${n} staged change${n === 1 ? '' : 's'} will be dropped. Nothing has been written to the vehicle.`, 'Discard', true)) {
-          const names = [...this.pending.keys()];
-          this.pending.clear();
-          for (const nm of names) this.afterStage(nm);
-          if (this.group === MODIFIED) { this.group = ALL; this.render(); }
-        }
-      } }, icon('undo'), h('span', null, 'Discard')),
-      h('button', { class: 'btn btn-write', type: 'button', disabled: this.writing || invalid.length > 0 || !this.vehicle.connected,
-        onclick: () => this.writePending() }, icon('write'), h('span', { class: 'btn-write-label' }, this.writing ? 'Writing…' : [`Write ${n}`, h('span', { class: 'hide-sm' }, ' to vehicle')])),
-    );
-  }
-
-  private async writePending() {
-    const entries = [...this.pending];
-    const outOfRange = entries.filter(([name, v]) => { const r = this.meta[name]?.r; return r && (v < r[0] || v > r[1]); });
-    if (outOfRange.length && !(await confirmDialog('Write values outside the documented range?',
-      `${outOfRange.map(([n]) => n).join(', ')} ${outOfRange.length === 1 ? 'is' : 'are'} outside ArduPilot’s documented range. The vehicle may still accept ${outOfRange.length === 1 ? 'it' : 'them'}.`,
-      'Write anyway', true))) return;
-
-    this.writing = true;
-    this.renderTray();
-    const failed = await this.vehicle.params.setMany(entries, (done, total) => {
-      const label = this.tray.querySelector('.btn-write-label');
-      if (label) label.textContent = `Writing ${done} of ${total}…`;
-    });
-    this.writing = false;
-    const failedNames = new Set(failed.map((f) => f.name));
-    for (const [name] of entries) {
-      if (failedNames.has(name)) continue;
-      this.pending.delete(name);
-      if (this.meta[name]?.rb) this.rebootNeeded.add(name);
-      this.afterStage(name);
-    }
-    const ok = entries.length - failed.length;
-    if (ok) toast(`Wrote ${ok} parameter${ok === 1 ? '' : 's'}`, 'ok');
-    for (const f of failed.slice(0, 3)) toast(f.error, 'error');
-    if (failed.length > 3) toast(`${failed.length - 3} more failed — they stay staged`, 'error');
-    this.renderTray();
-    this.renderReboot();
-    if (this.group === MODIFIED && !this.pending.size) { this.group = ALL; this.render(); }
-  }
-
-  private renderReboot() {
-    this.rebootBar.hidden = this.rebootNeeded.size === 0;
-    if (!this.rebootNeeded.size) return;
-    clear(this.rebootBar,
-      icon('info'),
-      h('span', null, `Reboot the flight controller to apply ${[...this.rebootNeeded].slice(0, 4).join(', ')}${this.rebootNeeded.size > 4 ? ` and ${this.rebootNeeded.size - 4} more` : ''}.`),
-      h('button', { class: 'btn btn-small', type: 'button', onclick: async () => {
-        if (this.vehicle.store.state.armed) { toast('Disarm before rebooting', 'warn'); return; }
-        if (!(await confirmDialog('Reboot flight controller?', 'The link will drop for a few seconds. Parameters are reloaded when it comes back.', 'Reboot'))) return;
-        try { await this.vehicle.reboot(); } catch { /* many boards reboot before acking */ }
-        this.rebootNeeded.clear();
-        this.renderReboot();
-        toast('Rebooting…', 'info');
-        this.awaitRebootAndReload();
-      } }, icon('power', 16), h('span', null, 'Reboot now')),
-      h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Dismiss', onclick: () => { this.rebootNeeded.clear(); this.renderReboot(); } }, icon('close')),
-    );
-  }
-
-  /** After a reboot, wait for heartbeats to stop and resume, then re-read parameters. */
-  private awaitRebootAndReload() {
-    const start = performance.now();
-    let sawLoss = false;
-    const unsub = this.vehicle.store.subscribe((s) => {
-      if (s.link === 'lost') sawLoss = true;
-      if (sawLoss && s.link === 'connected') { unsub(); void this.vehicle.params.fetchAll(); }
-      if (performance.now() - start > 60000) unsub();
-    });
   }
 
   // ---------- toolbar actions ----------
@@ -561,12 +466,11 @@ export class ParamsView {
     if (!this.vehicle.connected) { toast('Not connected', 'warn'); return; }
     if (this.pending.size && !(await confirmDialog('Re-read all parameters?', 'Your staged changes are kept and shown against the fresh values.', 'Re-read'))) return;
     this.lastCount = -1;
-    const keep = new Map(this.pending);
+    const keep = [...this.pending];
     await this.vehicle.params.fetchAll();
-    for (const [k, v] of keep) if (this.vehicle.params.get(k)) this.pending.set(k, v);
+    this.staging.stageMany(keep.filter(([k]) => this.vehicle.params.get(k)));
     this.rows.clear();
     this.render();
-    this.renderTray();
   }
 
   private saveFile() {
@@ -634,9 +538,11 @@ export class ParamsView {
       h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, 'Close'),
       diffs.length ? h('button', { class: 'btn btn-primary', type: 'button', onclick: () => {
         let n = 0;
-        for (const d of diffs) if (boxes.get(d.name)!.checked) { this.pending.set(d.name, d.value); n++; }
+        const chosen = diffs.filter((d) => boxes.get(d.name)!.checked).map((d): [string, number] => [d.name, d.value]);
+        this.staging.stageMany(chosen);
+        n = chosen.length;
         m.close();
-        if (n) { this.group = MODIFIED; this.query = ''; this.search.value = ''; this.render(); this.renderTray(); toast(`Staged ${n} change${n === 1 ? '' : 's'} from ${fileName}`, 'ok'); }
+        if (n) { this.group = MODIFIED; this.query = ''; this.search.value = ''; this.render(); toast(`Staged ${n} change${n === 1 ? '' : 's'} from ${fileName}`, 'ok'); }
       } }, icon('diff'), h('span', null, 'Stage selected')) : null,
     ], { wide: true });
   }

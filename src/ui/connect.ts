@@ -106,6 +106,8 @@ export function openConnectDialog(vehicle: Vehicle, initialTab?: 'usb' | 'net') 
     goLabel.textContent = 'Connecting…';
     try {
       await vehicle.connect(transport); // serial port picker opens here (needs the click gesture)
+      // Remember USB ports so the app reconnects by itself next time.
+      storage.set('autoUsb', transport instanceof SerialTransport ? transport.usbInfo : null);
       m.close();
     } catch (e) {
       const msg = (e as Error).message;

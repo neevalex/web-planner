@@ -4,6 +4,21 @@ A web ground control station for ArduPilot, focused on **configuring** vehicles:
 
 Runs in the browser. USB via Web Serial (Chrome/Edge on desktop), UDP/TCP through a small bridge.
 
+## Setup pages
+
+All setup pages edit through the same staged-changes system as the parameter editor: edits turn amber, collect in one tray, and are written and verified together. Each page shows only the parameters this vehicle and firmware actually have, so Copter, Plane (incl. QuadPlane) and Rover get the right fields.
+
+- **Basic** — frame class picker with motor-layout diagram, frame type, board orientation with live attitude, GPS with live fix, battery monitor with live voltage, identity. Accelerometer calibration (6-position, guided) and level calibration.
+- **Radio** — live stick gimbals (Mode 1 / Mode 2), every channel's PWM with calibrated min/trim/max, per-channel reverse, radio calibration that stages new `RCn_MIN/MAX/TRIM`, receiver and stick-mapping settings.
+- **Channels** — flight-mode channel and the six slots with PWM ranges; the active slot highlights live as you flip the switch; Simple/Super-simple per slot (Copter). Aux functions (`RCn_OPTION`) for every channel through a searchable picker, with live Low/Mid/High switch position.
+- **Motors** — motor layout with numbers, spin direction, test letters and output mapping (`SERVOn_FUNCTION`), live motor outputs, motor test per motor or in sequence (click a motor on the diagram), DShot reverse per motor, motor output / battery compensation / ESC settings, and a gallery of common layouts.
+- **Compass** — detected compasses decoded from device IDs (bus, address, sensor), priority reordering, use/orientation per compass, onboard calibration with per-compass progress, coverage grid and fitness, plus heading-based quick calibration for large vehicles.
+- **Battery** — a tab per monitor in use (plus one to add another), live voltage / current / mAh / remaining with a gauge marking the arm, low and critical thresholds, per-cell readout. Calibration against a multimeter (voltage), a clamp meter (current) or the mAh your charger put back, each computing the new scale factor. Pack presets by chemistry, cell count and capacity (arm/low/critical voltages, optional capacity failsafes, motor thrust compensation, OSD cell count), with your own saved packs. Sensor presets for common analog power modules.
+- **Failsafe** — summary of which failsafes are on; radio (with live throttle vs threshold), battery low/critical (with live voltage), ground station, EKF, geofence and others.
+- **OSD** — OSD settings and warning thresholds, plus a drag-and-drop screen builder for screens 1–4 (SD PAL/NTSC and HD grids), element list with show/hide, arrow-key nudging.
+
+USB connections are remembered: when the app opens, or when the flight controller is plugged in while it's open, it reconnects to the same port automatically. Disconnecting by hand turns that off until you connect again.
+
 ## What works now (milestone 1)
 
 - **Connect** over USB (Web Serial, any baud) or the network (UDP listen, UDP to address, TCP) through the bridge.
@@ -17,7 +32,8 @@ Runs in the browser. USB via Web Serial (Chrome/Edge on desktop), UDP/TCP throug
   - Edits are **staged** (amber) and written together with verification; failures stay staged. Range violations warn before writing.
   - Reboot prompt when a written parameter needs it, then automatic re-read after reboot.
   - Save to `.param`; load a `.param` (Mission Planner, MAVProxy or QGC format) → compare dialog → stage selected differences.
-- **Status page**: attitude indicator and bench telemetry. **Messages**: STATUSTEXT log (pre-arm failures etc.).
+- **Status page**: attitude indicator and bench telemetry.
+- **Console** docked at the bottom: autopilot messages (pre-arm failures, calibration results) and app events (connect, parameter writes) as timestamped log lines. Collapsible and resizable.
 - Light theme for sunlight, dark theme follows the system. Works on tablets and phones.
 
 ## Run it

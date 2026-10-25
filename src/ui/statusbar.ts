@@ -2,7 +2,7 @@
 import type { VehicleState } from '../vehicle/state';
 import { vehicleTypeName } from '../vehicle/modes';
 import type { Vehicle } from '../vehicle/vehicle';
-import { h } from './dom';
+import { h, storage } from './dom';
 import { openConnectDialog } from './connect';
 import { icon } from './icons';
 
@@ -28,7 +28,7 @@ export function statusBar(vehicle: Vehicle): HTMLElement {
   const connectBtn = h('button', { class: 'btn connect-btn', type: 'button' });
   connectBtn.addEventListener('click', () => {
     if (vehicle.store.state.link === 'disconnected') openConnectDialog(vehicle);
-    else void vehicle.disconnect();
+    else { storage.set('autoUsb', null); void vehicle.disconnect(); } // a deliberate disconnect stops auto-connect
   });
 
   const bar = h('header', { class: 'statusbar' },
@@ -39,42 +39,49 @@ export function statusBar(vehicle: Vehicle): HTMLElement {
     connectBtn,
   );
 
+  // Only touch the DOM when something visible changed (this runs on every telemetry frame).
+  const last: Record<string, string> = {};
+  const changed = (k: string, v: string) => (last[k] === v ? false : ((last[k] = v), true));
+  const text = (el: HTMLElement, v: string) => { if (el.textContent !== v) el.textContent = v; };
+
   vehicle.store.subscribe((s: VehicleState) => {
     const live = s.link === 'connected' || s.link === 'lost';
     bar.dataset.link = s.link;
-    linkText.textContent = {
+    text(linkText, {
       disconnected: 'Not connected',
       connecting: 'Connecting…',
       waiting: 'Waiting for vehicle…',
       connected: 'Connected',
       lost: 'Link lost',
-    }[s.link];
-    linkSub.textContent = s.link === 'disconnected' ? (s.linkError ?? 'USB or network') : s.linkLabel;
-    linkSub.title = linkSub.textContent;
+    }[s.link]);
+    text(linkSub, s.link === 'disconnected' ? (s.linkError ?? 'USB or network') : s.linkLabel);
+    linkSub.title = linkSub.textContent ?? '';
 
     bar.classList.toggle('is-live', live);
-    vehicleName.textContent = live ? (s.firmware || 'ArduPilot') : '';
-    vehicleSub.textContent = live ? `${vehicleTypeName(s.mavType)} · system ${s.sysid}` : '';
+    text(vehicleName, live ? (s.firmware || 'ArduPilot') : '');
+    text(vehicleSub, live ? `${vehicleTypeName(s.mavType)} · system ${s.sysid}` : '');
 
-    connectBtn.replaceChildren(
-      icon(s.link === 'disconnected' ? 'plug' : 'unplug'),
-      h('span', null, s.link === 'disconnected' ? 'Connect' : 'Disconnect'),
-    );
-    connectBtn.classList.toggle('btn-accent', s.link === 'disconnected');
+    if (changed('btn', String(s.link === 'disconnected'))) {
+      connectBtn.replaceChildren(
+        icon(s.link === 'disconnected' ? 'plug' : 'unplug'),
+        h('span', null, s.link === 'disconnected' ? 'Connect' : 'Disconnect'),
+      );
+      connectBtn.classList.toggle('btn-accent', s.link === 'disconnected');
+    }
 
     for (const c of [mode, gps.el, batt.el, ekf.el]) c.hidden = !live;
     armed.hidden = !(live && s.armed);
-    mode.textContent = s.modeName;
+    text(mode, s.modeName);
 
-    gps.label.textContent = `${GPS_FIX[s.gpsFix] ?? 'GPS'} · ${s.gpsSats}`;
+    text(gps.label, `${GPS_FIX[s.gpsFix] ?? 'GPS'} · ${s.gpsSats}`);
     gps.el.dataset.level = s.gpsFix >= 3 ? 'ok' : s.gpsFix >= 2 ? 'warn' : 'bad';
     gps.el.title = `GPS: ${GPS_FIX[s.gpsFix] ?? s.gpsFix}, ${s.gpsSats} satellites, HDOP ${s.gpsHdop.toFixed(1)}`;
 
-    batt.label.textContent = s.batteryVoltage > 0
-      ? `${s.batteryVoltage.toFixed(1)} V${s.batteryRemaining >= 0 ? ` · ${s.batteryRemaining}%` : ''}` : 'No battery';
+    text(batt.label, s.batteryVoltage > 0
+      ? `${s.batteryVoltage.toFixed(1)} V${s.batteryRemaining >= 0 ? ` · ${s.batteryRemaining}%` : ''}` : 'No battery');
     batt.el.dataset.level = s.batteryVoltage <= 0 ? '' : s.batteryRemaining >= 0 && s.batteryRemaining < 20 ? 'bad' : 'ok';
 
-    ekf.el.replaceChildren(icon(s.ekfOk === false ? 'ekfBad' : 'ekfOk', 16), h('span', null, 'EKF'));
+    if (changed('ekf', String(s.ekfOk))) ekf.el.replaceChildren(icon(s.ekfOk === false ? 'ekfBad' : 'ekfOk', 16), h('span', null, 'EKF'));
     ekf.el.dataset.level = s.ekfOk === null ? '' : s.ekfOk ? 'ok' : 'bad';
     ekf.el.title = s.ekfOk === null ? 'EKF status unknown' : s.ekfOk ? 'EKF healthy' : 'EKF not ready — check the Messages tab';
   });

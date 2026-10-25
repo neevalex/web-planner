@@ -29,6 +29,7 @@ export function statusView(vehicle: Vehicle): HTMLElement {
   const deg = (r: number) => (r * 180) / Math.PI;
 
   vehicle.store.subscribe((s: VehicleState) => {
+    if (!el.isConnected) return; // hidden: skip canvas and DOM work
     const live = s.link === 'connected' || s.link === 'lost';
     el.classList.toggle('is-offline', !live);
     drawHud(canvas, s, live);

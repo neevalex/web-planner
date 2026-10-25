@@ -71,6 +71,35 @@ export class Vehicle {
       this.store.update({ firmware: `${vehicleWord} V${(v >>> 24) & 0xff}.${(v >> 16) & 0xff}.${(v >> 8) & 0xff}${t ? '-' + t : ''}` });
     });
     this.on('STATUSTEXT', (d) => this.onStatusText(d));
+    this.on('RC_CHANNELS', (d) => {
+      const r = d as unknown as Record<string, number>;
+      const rc: number[] = [];
+      for (let i = 1; i <= 18; i++) rc.push(r[`chan${i}_raw`] === 65535 ? 0 : r[`chan${i}_raw`]);
+      this.store.update({ rc, rcCount: d.chancount, rssi: d.rssi });
+    });
+    this.on('BATTERY_STATUS', (d) => {
+      const raw = [...d.voltages, ...(d.voltages_ext ?? []).filter((x) => x > 0)];
+      const valid = raw.filter((x) => x !== 65535 && x > 0);
+      // ArduPilot sends the total in voltages[0] (split across slots above 65.5 V) unless it measures cells.
+      const cells = d.voltages.filter((x) => x !== 65535 && x > 0).length > 1 && d.voltages[0] < 5000 ? valid.map((x) => x / 1000) : [];
+      const info = {
+        voltage: valid.reduce((a, b) => a + b, 0) / 1000,
+        current: d.current_battery === -1 ? -1 : d.current_battery / 100,
+        consumed: d.current_consumed,
+        remaining: d.battery_remaining,
+        cells,
+        temperature: d.temperature === 32767 ? null : d.temperature / 100,
+        time: Date.now(),
+      };
+      this.store.update({ batteries: { ...this.store.state.batteries, [d.id]: info } });
+    });
+    this.on('SERVO_OUTPUT_RAW', (d) => {
+      if (d.port !== 0) return;
+      const r = d as unknown as Record<string, number | undefined>;
+      const servo: number[] = [];
+      for (let i = 1; i <= 16; i++) servo.push(r[`servo${i}_raw`] ?? 0);
+      this.store.update({ servo });
+    });
   }
 
   get target() { return { target_system: this.store.state.sysid, target_component: this.store.state.compid }; }
@@ -245,6 +274,11 @@ export class Vehicle {
     try { return await this.command(MAV_CMD.MAV_CMD_REQUEST_MESSAGE, [msgid], { retries: 2 }); } catch { return -1; }
   }
 
+  /** Ask for a message at `hz` (0 = firmware default rate). */
+  setMessageRate(msgid: number, hz: number) {
+    return this.command(MAV_CMD.MAV_CMD_SET_MESSAGE_INTERVAL, [msgid, hz > 0 ? Math.round(1e6 / hz) : 0], { retries: 2 }).catch(() => -1);
+  }
+
   setMode(customMode: number) {
     return this.command(MAV_CMD.MAV_CMD_DO_SET_MODE, [MAV_MODE_FLAG.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, customMode]);
   }
@@ -257,13 +291,19 @@ export class Vehicle {
     return this.command(MAV_CMD.MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN, [1], { retries: 1 });
   }
 
+  /** Adds a line from the app itself to the console. */
+  log(text: string, severity = 6) {
+    const msg: StatusMessage = { time: Date.now(), severity, text, source: 'app' };
+    this.store.update({ messages: [...this.store.state.messages.slice(-999), msg] });
+  }
+
   // ---------- STATUSTEXT ----------
 
   private onStatusText(d: MessageMap['STATUSTEXT']) {
     const id = d.id ?? 0;
     const add = (text: string, severity: number) => {
-      const msg: StatusMessage = { time: Date.now(), severity, text };
-      this.store.update({ messages: [...this.store.state.messages.slice(-499), msg] });
+      const msg: StatusMessage = { time: Date.now(), severity, text, source: 'fc' };
+      this.store.update({ messages: [...this.store.state.messages.slice(-999), msg] });
     };
     if (!id) { add(d.text, d.severity); return; }
     // Multi-chunk message: chunks are 50 chars; the last chunk is shorter (or followed by nothing).

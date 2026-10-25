@@ -3,7 +3,19 @@ import type { VehicleClass } from './modes';
 
 export type LinkState = 'disconnected' | 'connecting' | 'waiting' | 'connected' | 'lost';
 
-export interface StatusMessage { time: number; severity: number; text: string }
+/** source 'fc' = STATUSTEXT from the autopilot, 'app' = WebPlanner's own events. */
+export interface StatusMessage { time: number; severity: number; text: string; source?: 'fc' | 'app' }
+
+/** One battery monitor from BATTERY_STATUS (id 0 = BATT, 1 = BATT2…). */
+export interface BatteryInfo {
+  voltage: number;            // V
+  current: number;            // A, -1 unknown
+  consumed: number;           // mAh, -1 unknown
+  remaining: number;          // %, -1 unknown
+  cells: number[];            // per-cell V when the monitor reports them
+  temperature: number | null; // °C
+  time: number;               // ms timestamp of last update
+}
 
 export interface VehicleState {
   link: LinkState;
@@ -31,6 +43,11 @@ export interface VehicleState {
   home: { lat: number; lon: number; alt: number } | null;
   distToHome: number | null;
 
+  /** RC input PWM, channel 1 at index 0 (0 = no data). */
+  rc: number[]; rcCount: number; rssi: number;
+  /** Servo/motor output PWM, output 1 at index 0. */
+  servo: number[];
+  batteries: Record<number, BatteryInfo>;
   messages: StatusMessage[];
   rxRate: number; txRate: number; packetLoss: number;
 }
@@ -46,6 +63,9 @@ export const initialState = (): VehicleState => ({
   batteryVoltage: 0, batteryCurrent: -1, batteryRemaining: -1,
   ekfOk: null,
   home: null, distToHome: null,
+  rc: [], rcCount: 0, rssi: 255,
+  servo: [],
+  batteries: {},
   messages: [],
   rxRate: 0, txRate: 0, packetLoss: 0,
 });
