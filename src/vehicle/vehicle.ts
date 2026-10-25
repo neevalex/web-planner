@@ -29,11 +29,32 @@ export class Vehicle {
   private timers: ReturnType<typeof setInterval>[] = [];
   private statusChunks = new Map<number, { parts: string[]; severity: number; time: number }>();
   private lastRateSample = { t: 0, rx: 0, tx: 0, packets: 0, dropped: 0 };
+  /** Until this time (performance.now) a lost link is expected because we asked for a reboot. */
+  rebootUntil = 0;
+  private lastBootMs = 0;
+  private lastAttitude = 0;
+  private lastStreamRequest = 0;
+
+  /** The autopilot's uptime going backwards means it restarted: parameters may have changed, so reload them. */
+  private checkBoot(bootMs: number) {
+    const restarted = this.lastBootMs > 0 && bootMs + 2000 < this.lastBootMs;
+    this.lastBootMs = bootMs;
+    if (!restarted) return;
+    const expected = performance.now() < this.rebootUntil;
+    this.rebootUntil = 0;
+    this.log(expected ? 'Flight controller restarted — reloading parameters' : 'Flight controller restarted unexpectedly — reloading parameters', expected ? 6 : 4);
+    this.requestStreams();
+    void this.params.fetchAll();
+  }
 
   constructor() {
     this.params = new ParamManager(this);
     this.on('HEARTBEAT', (d, p) => this.onHeartbeat(d, p));
-    this.on('ATTITUDE', (d) => this.store.update({ roll: d.roll, pitch: d.pitch, yaw: d.yaw }));
+    this.on('ATTITUDE', (d) => {
+      this.lastAttitude = performance.now();
+      this.checkBoot(d.time_boot_ms);
+      this.store.update({ roll: d.roll, pitch: d.pitch, yaw: d.yaw });
+    });
     this.on('GLOBAL_POSITION_INT', (d) => {
       const lat = d.lat / 1e7, lon = d.lon / 1e7;
       const home = this.store.state.home;
@@ -172,6 +193,8 @@ export class Vehicle {
   }
 
   private cleanup() {
+    this.lastBootMs = 0;
+    this.lastAttitude = 0;
     for (const t of this.timers) clearInterval(t);
     this.timers = [];
     this.transport = null;
@@ -188,6 +211,8 @@ export class Vehicle {
   private watchdog() {
     const s = this.store.state;
     const now = performance.now();
+    // Heartbeats but no telemetry: stream rates were reset (reboot, or another GCS changed them). Ask again.
+    if (s.link === 'connected' && now - this.lastAttitude > 2500 && now - this.lastStreamRequest > 3000) this.requestStreams();
     if (s.link === 'connected' && now - s.lastHeartbeat > HEARTBEAT_TIMEOUT_MS) this.store.update({ link: 'lost' });
     if (this.transport && now - this.lastRateSample.t >= 1000) {
       const dt = (now - this.lastRateSample.t) / 1000;
@@ -232,6 +257,7 @@ export class Vehicle {
 
   /** Legacy stream groups — supported by every ArduPilot version and honoured by SRx_ params. */
   requestStreams() {
+    this.lastStreamRequest = performance.now();
     const rates: [number, number][] = [
       [1, 2],   // RAW_SENSORS
       [2, 2],   // EXTENDED_STATUS: SYS_STATUS, GPS_RAW_INT, EKF...
@@ -288,6 +314,7 @@ export class Vehicle {
   }
 
   reboot() {
+    this.rebootUntil = performance.now() + 30000;
     return this.command(MAV_CMD.MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN, [1], { retries: 1 });
   }
 

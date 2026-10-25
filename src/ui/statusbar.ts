@@ -8,7 +8,7 @@ import { icon } from './icons';
 
 const GPS_FIX = ['No GPS', 'No fix', '2D fix', '3D fix', 'DGPS', 'RTK float', 'RTK fixed', 'Static', 'PPP'];
 
-export function statusBar(vehicle: Vehicle): HTMLElement {
+export function statusBar(vehicle: Vehicle, onReboot: () => void): HTMLElement {
   const linkText = h('span', { class: 'link-text' });
   const linkSub = h('span', { class: 'link-sub' });
   const vehicleName = h('span', { class: 'veh-name' });
@@ -25,6 +25,8 @@ export function statusBar(vehicle: Vehicle): HTMLElement {
   const batt = chip('battery');
   const ekf = chip('ekfOk');
 
+  const rebootBtn = h('button', { class: 'btn connect-btn reboot-btn', type: 'button', title: 'Reboot the flight controller', hidden: true, onclick: onReboot },
+    icon('power'), h('span', null, 'Reboot'));
   const connectBtn = h('button', { class: 'btn connect-btn', type: 'button' });
   connectBtn.addEventListener('click', () => {
     if (vehicle.store.state.link === 'disconnected') openConnectDialog(vehicle);
@@ -36,7 +38,7 @@ export function statusBar(vehicle: Vehicle): HTMLElement {
     h('div', { class: 'link' }, h('span', { class: 'dot' }), h('div', { class: 'stack' }, linkText, linkSub)),
     h('div', { class: 'veh' }, h('div', { class: 'stack' }, vehicleName, vehicleSub)),
     h('div', { class: 'chips' }, armed, mode, gps.el, batt.el, ekf.el),
-    connectBtn,
+    h('div', { class: 'bar-actions' }, rebootBtn, connectBtn),
   );
 
   // Only touch the DOM when something visible changed (this runs on every telemetry frame).
@@ -70,6 +72,7 @@ export function statusBar(vehicle: Vehicle): HTMLElement {
     }
 
     for (const c of [mode, gps.el, batt.el, ekf.el]) c.hidden = !live;
+    rebootBtn.hidden = s.link !== 'connected';
     armed.hidden = !(live && s.armed);
     text(mode, s.modeName);
 

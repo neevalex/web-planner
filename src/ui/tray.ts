@@ -4,6 +4,7 @@ import { confirmDialog } from './dialog';
 import { clear, h } from './dom';
 import { icon } from './icons';
 import { toast } from './toast';
+import { rebootVehicle } from './reboot';
 
 export function writeTray(staging: Staging, onReview: () => void): { tray: HTMLElement; reboot: HTMLElement } {
   const tray = h('div', { class: 'tray', hidden: true });
@@ -56,22 +57,7 @@ export function writeTray(staging: Staging, onReview: () => void): { tray: HTMLE
     if (failed.length > 3) toast(`${failed.length - 3} more failed — they stay staged`, 'error');
   }
 
-  async function rebootNow() {
-    if (vehicle.store.state.armed) { toast('Disarm before rebooting', 'warn'); return; }
-    if (!(await confirmDialog('Reboot flight controller?', 'The link will drop for a few seconds. Parameters are reloaded when it comes back.', 'Reboot'))) return;
-    try { await vehicle.reboot(); } catch { /* many boards reboot before acking */ }
-    staging.clearReboot();
-    vehicle.log('Reboot requested');
-    toast('Rebooting…', 'info');
-    // Reload parameters once heartbeats stop and come back.
-    let sawLoss = false;
-    const start = performance.now();
-    const unsub = vehicle.store.subscribe((s) => {
-      if (s.link === 'lost') sawLoss = true;
-      if (sawLoss && s.link === 'connected') { unsub(); void vehicle.params.fetchAll(); }
-      if (performance.now() - start > 60000) unsub();
-    });
-  }
+  const rebootNow = () => rebootVehicle(vehicle, staging);
 
   staging.onChange(render);
   let wasConnected = vehicle.connected;

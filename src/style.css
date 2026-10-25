@@ -175,6 +175,8 @@ input[type='checkbox'] { min-height: 0; width: 18px; height: 18px; accent-color:
 .connect-btn { background: transparent; color: var(--band-ink); border-color: rgba(255, 255, 255, 0.22); box-shadow: none; }
 .connect-btn .icon { color: inherit; }
 .connect-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.08); border-color: rgba(255, 255, 255, 0.4); }
+.bar-actions { display: flex; gap: 8px; align-items: center; }
+.reboot-btn:hover:not(:disabled) { border-color: #FF8A8A; color: #FF8A8A; }
 .connect-btn.btn-accent { background: var(--amber); color: #1B1200; border-color: var(--amber); }
 .connect-btn.btn-accent:hover:not(:disabled) { background: var(--amber-strong); border-color: var(--amber-strong); }
 
@@ -381,14 +383,16 @@ input[type='checkbox'] { min-height: 0; width: 18px; height: 18px; accent-color:
 .page-title .icon { color: var(--ink-3); }
 .page-title h1 { margin: 0; font-size: 26px; line-height: 1.2; letter-spacing: -0.01em; }
 .page-lead { margin: 4px 0 0; color: var(--ink-2); max-width: 70ch; }
-.page-body { padding: 14px 28px 140px; display: flex; flex-direction: column; gap: 18px; max-width: 1400px; }
+.page-body { padding: 14px 28px 140px; display: flex; flex-direction: column; gap: 18px; max-width: 2400px; }
+.masonry { display: flex; gap: 18px; align-items: flex-start; }
+.masonry-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 18px; }
 .page-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; padding: 56px 24px; color: var(--ink-2); }
 .page-empty > .icon { color: var(--ink-3); }
 .page-empty h3 { margin: 0; color: var(--ink); font-size: 20px; }
 .page-empty p { margin: 0 0 8px; max-width: 52ch; }
 
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 460px), 1fr)); gap: 18px; align-items: start; }
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow-1); padding: 18px 20px 20px; min-width: 0; }
+.card { container-type: inline-size; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow-1); padding: 18px 20px 20px; min-width: 0; }
 .card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
 .card-head .icon { color: var(--ink-3); }
 .card-head h2 { margin: 0; font-size: 18px; }
@@ -828,6 +832,8 @@ input[type='checkbox'] { min-height: 0; width: 18px; height: 18px; accent-color:
   .brand span, .statusbar .veh { display: none; }
   .link { flex: 1; }
   .chips { flex: 1 1 100%; order: 5; margin-left: 0; }
+  .reboot-btn span { display: none; }
+  .reboot-btn { padding: 0 10px; }
   .statusbar:not(.is-live) .chips { display: none; }
   .shell { flex-direction: column-reverse; }
   .rail { width: auto; flex-direction: row; padding: 6px; border-right: 0; border-top: 1px solid var(--line); padding-bottom: max(6px, env(safe-area-inset-bottom)); }
@@ -875,4 +881,10 @@ input[type='checkbox'] { min-height: 0; width: 18px; height: 18px; accent-color:
   .cl { grid-template-columns: 82px minmax(0, 1fr); gap: 8px; padding: 0 10px; }
   .cl-lvl { display: none; }
   .cl .cl-time { font-size: 11px; }
+}
+
+/* Narrow cards: stack each label above its control. */
+@container (max-width: 500px) {
+  .frow { grid-template-columns: 1fr; gap: 8px; }
+  .frow-control select { max-width: 100%; }
 }

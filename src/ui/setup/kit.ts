@@ -88,7 +88,7 @@ export abstract class Page {
       return;
     }
     this.ctx.resetWatchers();
-    clear(this.body, this.build());
+    clear(this.body, flowCards(this.build()));
     this.ctx.refresh();
   }
 
@@ -131,6 +131,57 @@ export function fieldsCard(ctx: Ctx, title: string, ic: IconName | null, lead: s
 }
 
 export const grid = (...cards: (Node | null | false)[]) => h('div', { class: 'cards' }, cards.filter(Boolean) as Node[]);
+
+// ---------- masonry layout ----------
+
+const COL_MIN = 520;
+const GAP = 18;
+
+/** Consecutive grid() blocks on a page become one masonry flow, so short cards fill the space under each other. */
+function flowCards(nodes: (Node | null | false)[]): Node[] {
+  const out: Node[] = [];
+  let bucket: HTMLElement[] = [];
+  const flush = () => { if (bucket.length) out.push(masonry(bucket)); bucket = []; };
+  for (const n of nodes) {
+    if (!n) continue;
+    if (n instanceof HTMLElement && n.classList.contains('cards')) bucket.push(...(Array.from(n.children) as HTMLElement[]));
+    else { flush(); out.push(n); }
+  }
+  flush();
+  return out;
+}
+
+/** Places each card, in order, into the currently shortest column. Re-flows on width or card-size changes. */
+function masonry(items: HTMLElement[]): HTMLElement {
+  const root = h('div', { class: 'masonry' }, h('div', { class: 'masonry-col' }, items));
+  let cols = 0;
+  let lastHeights = '';
+  const layout = () => {
+    const w = root.clientWidth;
+    if (!w) return; // not on screen yet
+    const n = Math.max(1, Math.min(items.length, Math.floor((w + GAP) / (COL_MIN + GAP))));
+    // Moving a focused input between columns would blur it mid-edit.
+    if (n === cols && root.contains(document.activeElement) && document.activeElement !== document.body) return;
+    const heights = items.map((it) => it.offsetHeight).join(',');
+    if (n === cols && heights === lastHeights) return;
+    cols = n;
+    const columns = Array.from({ length: n }, () => h('div', { class: 'masonry-col' }));
+    root.replaceChildren(...columns);
+    const filled = new Array<number>(n).fill(0);
+    for (const it of items) {
+      const i = filled.indexOf(Math.min(...filled));
+      columns[i].append(it);
+      filled[i] += it.offsetHeight + GAP;
+    }
+    lastHeights = items.map((it) => it.offsetHeight).join(',');
+  };
+  let t: ReturnType<typeof setTimeout> | undefined;
+  const soon = (ms: number) => { clearTimeout(t); t = setTimeout(layout, ms); };
+  const ro = new ResizeObserver((entries) => soon(entries.some((e) => e.target === root) ? 0 : 250));
+  ro.observe(root);
+  for (const it of items) ro.observe(it);
+  return root;
+}
 
 // ---------- fields ----------
 

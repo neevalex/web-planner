@@ -17,6 +17,7 @@ import { icon, type IconName } from './ui/icons';
 import { MetaStore } from './ui/meta';
 import { Staging } from './ui/staging';
 import { writeTray } from './ui/tray';
+import { rebootVehicle } from './ui/reboot';
 import { Ctx, type Page } from './ui/setup/kit';
 import { BasicPage } from './ui/setup/basicPage';
 import { RadioPage } from './ui/setup/radioPage';
@@ -78,7 +79,7 @@ function show(key: string) {
   if (vehicle.connected) pages[key]?.onShow();
 }
 
-document.querySelector('#app')!.append(statusBar(vehicle), h('div', { class: 'shell' }, nav, main));
+document.querySelector('#app')!.append(statusBar(vehicle, () => void rebootVehicle(vehicle, staging)), h('div', { class: 'shell' }, nav, main));
 show(storage.get<string>('view', 'basic'));
 
 // Pages that need faster telemetry ask for it once the vehicle is up.
@@ -112,11 +113,18 @@ vehicle.store.subscribe((s) => {
   if (s.link === 'connecting') vehicle.log(`Opening ${s.linkLabel}`);
   if (s.link === 'waiting') vehicle.log(`${s.linkLabel} open, waiting for heartbeat`);
   if (s.link === 'connected' && lastLink !== 'lost') vehicle.log(`Connected to system ${s.sysid} (${s.linkLabel})`);
-  if (s.link === 'lost') { toast('Heartbeat lost — check the link', 'warn'); vehicle.log('Heartbeat lost', 4); }
-  if (s.link === 'connected' && lastLink === 'lost') { toast('Link restored', 'ok'); vehicle.log('Link restored'); }
+  const rebooting = performance.now() < vehicle.rebootUntil;
+  if (s.link === 'lost') {
+    if (!rebooting) toast('Heartbeat lost — check the link', 'warn');
+    vehicle.log(rebooting ? 'Waiting for the flight controller to restart…' : 'Heartbeat lost', rebooting ? 6 : 4);
+  }
+  if (s.link === 'connected' && lastLink === 'lost') { if (!rebooting) toast('Link restored', 'ok'); vehicle.log('Link restored'); }
   if (s.link === 'disconnected') {
-    if (s.linkError && lastLink !== 'connecting') toast(s.linkError, 'error');
-    vehicle.log(s.linkError ? `Disconnected: ${s.linkError}` : 'Disconnected', s.linkError ? 3 : 6);
+    if (rebooting) vehicle.log('USB dropped for the reboot — reconnecting when the board is back');
+    else {
+      if (s.linkError && lastLink !== 'connecting') toast(s.linkError, 'error');
+      vehicle.log(s.linkError ? `Disconnected: ${s.linkError}` : 'Disconnected', s.linkError ? 3 : 6);
+    }
   }
   lastLink = s.link;
 });
