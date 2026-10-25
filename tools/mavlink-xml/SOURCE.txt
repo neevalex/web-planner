@@ -1,0 +1,2 @@
+e03dad40efb3a4009ad6d78de5e55997139ac2f3 2026-10-14
+https://github.com/ArduPilot/mavlink

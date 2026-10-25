@@ -1,0 +1,14 @@
+services:
+  web:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+
+  # Optional: only needed where the vehicle's UDP/TCP link terminates
+  # (e.g. a Pi next to the radio). Anyone who can reach port 8765 can talk to the vehicle.
+  bridge:
+    build: ./bridge
+    restart: unless-stopped
+    network_mode: host   # receive UDP from the vehicle directly
+    profiles: ["bridge"]

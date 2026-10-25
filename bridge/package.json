@@ -1,0 +1,10 @@
+{
+  "name": "web-planner-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Relays MAVLink between WebPlanner (WebSocket) and UDP/TCP links",
+  "type": "module",
+  "bin": { "web-planner-bridge": "bridge.mjs" },
+  "scripts": { "start": "node bridge.mjs" },
+  "dependencies": { "ws": "^8.18.0" }
+}

@@ -1,0 +1,27 @@
+{
+  "name": "web-planner",
+  "version": "0.1.0",
+  "description": "Web ground control station for ArduPilot: parameters, setup and calibration",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "tsc && vite build",
+    "preview": "vite preview --host",
+    "typecheck": "tsc",
+    "gen:mavlink": "node tools/gen-mavlink.mjs",
+    "test": "tsx test/codec.test.ts",
+    "bridge": "node bridge/bridge.mjs"
+  },
+  "devDependencies": {
+    "@types/w3c-web-serial": "^1.0.9",
+    "fast-xml-parser": "^5.11.2",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5"
+  },
+  "dependencies": {
+    "@fontsource/barlow": "^5.3.0",
+    "@fontsource/ibm-plex-mono": "^5.3.0"
+  },
+  "private": true,
+  "type": "module"
+}
