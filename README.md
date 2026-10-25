@@ -15,7 +15,7 @@ All setup pages edit through the same staged-changes system as the parameter edi
 - **Compass** — detected compasses decoded from device IDs (bus, address, sensor), priority reordering, use/orientation per compass, onboard calibration with per-compass progress, coverage grid and fitness, plus heading-based quick calibration for large vehicles.
 - **Battery** — a tab per monitor in use (plus one to add another), live voltage / current / mAh / remaining with a gauge marking the arm, low and critical thresholds, per-cell readout. Calibration against a multimeter (voltage), a clamp meter (current) or the mAh your charger put back, each computing the new scale factor. Pack presets by chemistry, cell count and capacity (arm/low/critical voltages, optional capacity failsafes, motor thrust compensation, OSD cell count), with your own saved packs. Sensor presets for common analog power modules.
 - **Failsafe** — summary of which failsafes are on; radio (with live throttle vs threshold), battery low/critical (with live voltage), ground station, EKF, geofence and others.
-- **OSD** — OSD settings and warning thresholds, plus a drag-and-drop screen builder for screens 1–4 (SD PAL/NTSC and HD grids), element list with show/hide, arrow-key nudging.
+- **OSD** — OSD settings and warning thresholds, plus a drag-and-drop screen builder for screens 1–4. The preview draws every element with real OSD font glyphs — ArduPilot's five analog fonts (`OSD_FONT`), Betaflight's analog fonts, Walksnail Avatar HD fonts and the DJI WTFOS ArduPilot font — using ArduPilot's own element formats, symbols, units (`OSD_UNITS`), decimal packing and horizon/sidebar drawing. The font defaults to what the vehicle uses (`OSD_TYPE`, `OSD_FONT`, `MSP_OPTIONS` BTFL symbols), and the grid follows `OSDn_TXT_RES` on MSP DisplayPort. Elements only MSP goggles draw are marked. Show/hide list and arrow-key nudging.
 
 USB connections are remembered: when the app opens, or when the flight controller is plugged in while it's open, it reconnects to the same port automatically. Disconnecting by hand turns that off until you connect again.
 
@@ -115,3 +115,14 @@ npx tsx test/sitl.test.ts tcp --loss 0.2   # 20% simulated packet loss
 ## Next (milestone 2): setup pages
 
 Accelerometer and level calibration, onboard compass calibration with per-compass progress, radio calibration, motor test with frame diagram, GPS, failsafes, frame type, servo outputs.
+
+### OSD fonts
+
+`public/osd-fonts/` and `src/ui/setup/osdSymbols.ts` are generated from an ArduPilot checkout and Betaflight Configurator:
+
+```
+node tools/gen-osd-assets.mjs <ardupilot>/libraries/AP_OSD <betaflight-configurator>/resources/osd/2
+```
+
+The fonts are GPL-3.0 (ArduPilot, Betaflight Configurator); see `public/osd-fonts/LICENSE.txt`.
+

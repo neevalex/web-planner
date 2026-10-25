@@ -1,0 +1,4 @@
+OSD fonts in this folder come from:
+- ArduPilot (libraries/AP_OSD/fonts), GPL-3.0 — https://github.com/ArduPilot/ardupilot
+- Betaflight Configurator (resources/osd), GPL-3.0 — https://github.com/betaflight/betaflight-configurator
+The .mcm fonts were converted to PNG glyph atlases (16×16 grid of 12×18 glyphs). HD fonts are unmodified.

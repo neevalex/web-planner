@@ -2,32 +2,34 @@
 import { clear, h, storage } from '../dom';
 import { icon } from '../icons';
 import { card, field, fieldsCard, grid, Page, type Ctx } from './kit';
+import { OSD_FONTS, type OsdFont } from './osdSymbols';
+import { bounds, drawGlyph, loadFont, renderElement, type Cell, type Glyphs, type RenderOpts } from './osdRender';
 
-/** Preview text per OSD element; widths approximate ArduPilot's rendering. */
-const SAMPLE: Record<string, string> = {
-  ALTITUDE: '120m', BAT_VOLT: '16.4V', RSSI: 'RS99', CURRENT: '12.3A', BATUSED: '850mAh', SATS: 'SAT14', FLTMODE: 'STAB',
-  MESSAGE: 'PreArm: Need 3D Fix', GSPEED: '42km/h', HORIZON: '-- -- ^ -- --', HOME: '>230m', HEADING: '270', THROTTLE: '45%',
-  COMPASS: 'W--N--E', WIND: 'W3m/s', ASPEED: 'AS50', VSPEED: '+2.1', ESCTEMP: '45C', ESCRPM: '12kRPM', ESCAMPS: '8A',
-  GPSLAT: '50.45012', GPSLONG: '30.52340', ROLL: 'R12', PITCH: 'P-4', TEMP: '24C', HDOP: 'HD0.8', WAYPOINT: 'WP3 120m',
-  XTRACK: 'XT2m', DIST: '1.2km', STATS: 'FLIGHT STATS', FLTIME: '05:32', CLIMBEFF: '12m/Ah', EFF: '120mAh/km', BTEMP: '31C',
-  ATEMP: '22C', BAT2_VLT: '8.2V', BAT2USED: '210mAh', ASPD2: 'A2 48', ASPD1: 'A1 50', CLK: '14:05', SIDEBARS: '|        |',
-  CRSSHAIR: '-+-', HOMEDIST: 'H230m', HOMEDIR: '^', POWER: '250W', CELLVOLT: '4.10V', BATTBAR: '[######  ]', ARMING: 'ARMED',
-  PLUSCODE: '9G4X+22', CALLSIGN: 'CALLSIGN', CURRENT2: '3.1A', VTX_PWR: '25mW', TER_HGT: 'T80m', AVGCELLV: '3.85V',
-  RESTVOLT: '15.9V', FENCE: 'FENCE', RNGF: 'RF1.2m', ACRVOLT: '3.80V', RPM: '9500', LINK_Q: 'LQ100',
+const SD_GRID: Record<string, { cols: number; rows: number; label: string }> = {
+  pal: { cols: 30, rows: 16, label: 'PAL 30×16' },
+  ntsc: { cols: 30, rows: 13, label: 'NTSC 30×13' },
 };
+const HD_GRID = { cols: 50, rows: 18 };
+/** OSDn_TXT_RES: per-screen text grid on MSP DisplayPort. */
+const TXT_RES = [{ cols: 30, rows: 16 }, { cols: 50, rows: 18 }, { cols: 60, rows: 22 }, { cols: 53, rows: 20 }];
+/** Elements only MSP OSD goggles (OSD_TYPE 3) draw themselves; ArduPilot's own OSD backends skip them. */
+const MSP_ONLY = new Set(['CRSSHAIR', 'HOMEDIST', 'HOMEDIR', 'POWER', 'CELLVOLT', 'BATTBAR', 'ARMING']);
 
-const RES: Record<string, { cols: number; rows: number; label: string }> = {
-  pal: { cols: 30, rows: 16, label: 'SD PAL 30×16' },
-  ntsc: { cols: 30, rows: 13, label: 'SD NTSC 30×13' },
-  hd: { cols: 50, rows: 18, label: 'HD 50×18' },
-};
+const FONT_GROUPS: [string, (f: OsdFont) => boolean][] = [
+  ['ArduPilot analog (MAX7456)', (f) => f.kind === 'sd' && f.symbols === 'ap'],
+  ['Betaflight analog', (f) => f.kind === 'sd' && f.symbols === 'bf'],
+  ['Walksnail Avatar HD', (f) => f.family === 'walksnail'],
+  ['DJI goggles (WTFOS)', (f) => f.family === 'dji'],
+];
 
 interface Item { key: string; en: string; x: string; y: string }
 
 export class OsdPage extends Page {
   private screen = 1;
   private selected: string | null = null;
-  private res = storage.get<string>('osd.res', '');
+  private sdGrid = storage.get<string>('osd.res', 'pal');
+  private fontId = storage.get<string>('osd.font', '');
+  private glyphs: Glyphs | null = null;
 
   constructor(ctx: Ctx) {
     super(ctx, 'OSD', 'On-screen display settings and a drag-and-drop screen layout.', 'osd');
@@ -60,73 +62,156 @@ export class OsdPage extends Page {
       return [grid(settings, warn), h('div', { class: 'page-empty' }, icon('osd', 26), h('h3', null, 'Screen layout appears after enabling the OSD'), h('p', null, 'Set OSD type, write, and reboot the flight controller.'))];
     }
     if (!screens.includes(this.screen)) this.screen = screens[0];
-    if (!this.res) this.res = (c.param('OSD_TYPE')?.value ?? 0) === 5 ? 'hd' : 'pal';
     return [this.builder(screens), grid(settings, warn)];
   }
 
   // ---------- builder ----------
 
+  /** The font the vehicle is set up for: HD DisplayPort → ArduPilot HD font (or Betaflight's when BTFL symbols are on), else OSD_FONT. */
+  private defaultFont(): OsdFont {
+    const c = this.ctx;
+    const type = c.value('OSD_TYPE') ?? 0;
+    if (type === 5) {
+      const btfl = ((c.value('MSP_OPTIONS') ?? 0) & 4) !== 0;
+      return OSD_FONTS.find((f) => f.id === (btfl ? 'bf-default' : 'ws-ardu'))!;
+    }
+    const sd = OSD_FONTS.filter((f) => f.kind === 'sd' && f.symbols === 'ap');
+    return sd[Math.max(0, Math.min(sd.length - 1, c.value('OSD_FONT') ?? 0))];
+  }
+
+  private font(): OsdFont {
+    return OSD_FONTS.find((f) => f.id === this.fontId) ?? this.defaultFont();
+  }
+
   private builder(screens: number[]): HTMLElement {
     const c = this.ctx;
     const n = this.screen;
     const items = this.items(n);
-    const res = RES[this.res] ?? RES.pal;
+    const font = this.font();
+    const hd = font.kind === 'hd';
+    const type = c.value('OSD_TYPE') ?? 0;
+    const txtRes = type === 5 && c.has(`OSD${n}_TXT_RES`) ? TXT_RES[c.value(`OSD${n}_TXT_RES`) ?? 0] : undefined;
+    const res = txtRes ?? (hd ? HD_GRID : SD_GRID[this.sdGrid] ?? SD_GRID.pal);
+    const mspOnlyHidden = (key: string) => type !== 3 && MSP_ONLY.has(key);
 
     const tabs = h('div', { class: 'segmented segmented-sm', role: 'tablist' }, screens.map((s) =>
       h('button', { type: 'button', class: 'seg', role: 'tab', 'aria-selected': String(s === n), onclick: () => { this.screen = s; this.selected = null; this.rebuild(); } }, `Screen ${s}`)));
-    const resSel = h('select', { 'aria-label': 'Preview resolution', onchange: () => { this.res = resSel.value; storage.set('osd.res', this.res); this.rebuild(); } },
-      Object.entries(RES).map(([k, r]) => h('option', { value: k, selected: k === this.res }, r.label)));
 
-    const canvas = h('div', { class: 'osd-canvas', style: `--cols:${res.cols};--rows:${res.rows}` });
-    const els = new Map<string, HTMLElement>();
+    const def = this.defaultFont();
+    const fontSel = h('select', { 'aria-label': 'Preview font', onchange: () => {
+      this.fontId = fontSel.value === def.id ? '' : fontSel.value;
+      storage.set('osd.font', this.fontId);
+      this.glyphs = null;
+      this.rebuild();
+    } }, FONT_GROUPS.map(([label, test]) => h('optgroup', { label }, OSD_FONTS.filter(test).map((f) =>
+      h('option', { value: f.id, selected: f.id === font.id }, `${f.label}${f.id === def.id ? ' — vehicle setting' : ''}`)))));
+    const sdSel: HTMLSelectElement = h('select', { 'aria-label': 'Video standard', onchange: () => { this.sdGrid = sdSel.value; storage.set('osd.res', this.sdGrid); this.rebuild(); } },
+      Object.entries(SD_GRID).map(([k, r]) => h('option', { value: k, selected: k === this.sdGrid }, r.label)));
+    const gridSel = txtRes ? h('span', { class: 'osd-gridlabel', title: `Set by OSD${n}_TXT_RES` }, `DisplayPort ${res.cols}×${res.rows}`)
+      : hd ? h('span', { class: 'osd-gridlabel' }, `HD ${res.cols}×${res.rows}`) : sdSel;
+
+    // Glyph canvas at the font's native pixel size, scaled to fit; hit boxes sit on top for selecting and dragging.
+    const canvas = h('canvas', { class: 'osd-glyphs', 'aria-hidden': 'true' }) as HTMLCanvasElement;
+    const stage = h('div', { class: `osd-canvas${hd ? ' is-hd' : ''}`, style: `--cols:${res.cols};--rows:${res.rows}` }, canvas);
+    const status = h('p', { class: 'osd-hint osd-fontstatus' });
+
+    const drag = new Map<string, [number, number]>();
+    const cellsOf = new Map<string, Cell[]>();
+    const boxes = new Map<string, HTMLElement>();
+    const side = h('div', { class: 'osd-side' });
+
+    const opts = (): RenderOpts => ({
+      symbols: font.symbols, units: c.value('OSD_UNITS') ?? 0, options: c.value('OSD_OPTIONS') ?? 0, sd: !hd,
+      cellCount: c.value('OSD_CELL_COUNT') ?? 0, sidebarHOfs: c.value('OSD_SB_H_OFS') ?? 0, sidebarVExt: c.value('OSD_SB_V_EXT') ?? 0,
+    });
+    const pos = (it: Item): [number, number] => drag.get(it.key) ?? [c.value(it.x) ?? 0, c.value(it.y) ?? 0];
+
+    const draw = () => {
+      const g = this.glyphs;
+      const o = opts();
+      for (const it of items) cellsOf.set(it.key, renderElement(it.key, o));
+      if (g) {
+        if (canvas.width !== res.cols * g.gw || canvas.height !== res.rows * g.gh) { canvas.width = res.cols * g.gw; canvas.height = res.rows * g.gh; }
+        const ctx2 = canvas.getContext('2d')!;
+        ctx2.imageSmoothingEnabled = false;
+        ctx2.clearRect(0, 0, canvas.width, canvas.height);
+        for (const it of items) {
+          if ((c.value(it.en) ?? 0) === 0 || mspOnlyHidden(it.key)) continue;
+          const [x, y] = pos(it);
+          for (const cell of cellsOf.get(it.key)!) {
+            const cx = x + cell.dx, cy = y + cell.dy;
+            if (cx >= 0 && cy >= 0 && cx < res.cols && cy < res.rows) drawGlyph(ctx2, g, cell.code, cx * g.gw, cy * g.gh);
+          }
+        }
+      }
+      for (const it of items) {
+        const box = boxes.get(it.key)!;
+        const on = (c.value(it.en) ?? 0) !== 0;
+        const b = bounds(cellsOf.get(it.key)!);
+        const [x, y] = pos(it);
+        box.hidden = !on;
+        box.style.setProperty('--x', String(x + b.x0));
+        box.style.setProperty('--y', String(y + b.y0));
+        box.style.setProperty('--w', String(b.x1 - b.x0));
+        box.style.setProperty('--h', String(b.y1 - b.y0));
+        box.classList.toggle('is-pending', c.staging.isPending(it.x) || c.staging.isPending(it.y) || c.staging.isPending(it.en));
+      }
+    };
+
     for (const it of items) {
-      const text = SAMPLE[it.key] ?? it.key.replace(/_/g, ' ').toLowerCase();
-      const el = h('div', { class: 'osd-el', tabindex: 0, role: 'button', 'aria-label': `${it.key}, drag to move`, dataset: { key: it.key }, style: `--w:${text.length}` }, text);
-      this.makeDraggable(el, it, res, text.length);
-      el.addEventListener('pointerdown', () => this.select(it.key, els, side, items));
-      el.addEventListener('focus', () => this.select(it.key, els, side, items));
-      el.addEventListener('keydown', (e) => this.nudge(e, it, res, text.length));
-      canvas.append(el);
-      els.set(it.key, el);
+      const msp = mspOnlyHidden(it.key);
+      const box = h('div', { class: `osd-el${msp ? ' is-msp' : ''}`, tabindex: 0, role: 'button', 'aria-label': `${prettyKey(it.key)}, drag to move`, dataset: { key: it.key },
+        title: msp ? `${prettyKey(it.key)} — only drawn by MSP OSD goggles (OSD type 3)` : prettyKey(it.key) });
+      if (it.key === this.selected) box.classList.add('is-selected');
+      this.makeDraggable(box, it, res, cellsOf, drag, draw);
+      box.addEventListener('pointerdown', () => this.select(it.key, boxes, side, items));
+      box.addEventListener('focus', () => this.select(it.key, boxes, side, items));
+      box.addEventListener('keydown', (e) => this.nudge(e, it, res, cellsOf));
+      stage.append(box);
+      boxes.set(it.key, box);
     }
 
-    const side = h('div', { class: 'osd-side' });
+    if (this.glyphs?.font.id !== font.id) {
+      this.glyphs = null;
+      status.textContent = 'Loading font…';
+      loadFont(font).then((g) => { if (this.font().id === g.font.id) { this.glyphs = g; status.textContent = ''; draw(); } })
+        .catch((e: Error) => { status.textContent = e.message; });
+    }
+
     const filter = h('input', { type: 'search', class: 'picker-search', placeholder: 'Filter elements', 'aria-label': 'Filter OSD elements' });
     const list = h('div', { class: 'osd-items' });
     const renderList = () => {
       const q = filter.value.trim().toLowerCase();
       clear(list, items.filter((it) => !q || it.key.toLowerCase().includes(q) || (c.m(it.en)?.n ?? '').toLowerCase().includes(q)).map((it) => {
-        const cb = h('input', { type: 'checkbox', checked: (c.value(it.en) ?? 0) !== 0, onchange: () => { c.stage(it.en, cb.checked ? 1 : 0); this.select(it.key, els, side, items); } });
+        const cb = h('input', { type: 'checkbox', checked: (c.value(it.en) ?? 0) !== 0, onchange: () => { c.stage(it.en, cb.checked ? 1 : 0); this.select(it.key, boxes, side, items); } });
         return h('label', { class: `osd-item${c.staging.isPending(it.en) ? ' is-pending' : ''}${this.selected === it.key ? ' is-selected' : ''}` },
-          cb, h('span', null, prettyKey(it.key)), h('span', { class: 'osd-item-code' }, it.key));
+          cb, h('span', null, prettyKey(it.key), mspOnlyHidden(it.key) ? h('span', { class: 'osd-item-tag', title: 'Only drawn by MSP OSD goggles (OSD type 3)' }, 'MSP') : null), h('span', { class: 'osd-item-code' }, it.key));
       }));
     };
     filter.addEventListener('input', renderList);
 
+    const resKey = `${type}/${txtRes ? c.value(`OSD${n}_TXT_RES`) : '-'}`;
     c.watch(() => {
-      for (const it of items) {
-        const el = els.get(it.key)!;
-        const on = (c.value(it.en) ?? 0) !== 0;
-        el.hidden = !on;
-        el.style.setProperty('--x', String(c.value(it.x) ?? 0));
-        el.style.setProperty('--y', String(c.value(it.y) ?? 0));
-        el.classList.toggle('is-pending', c.staging.isPending(it.x) || c.staging.isPending(it.y) || c.staging.isPending(it.en));
-      }
+      const t = c.value('OSD_TYPE') ?? 0;
+      if (`${t}/${t === 5 && c.has(`OSD${n}_TXT_RES`) ? c.value(`OSD${n}_TXT_RES`) : '-'}` !== resKey) { queueMicrotask(() => this.rebuild()); return; }
+      draw();
       if (document.activeElement !== filter) renderList();
     });
 
-    const screenFields = h('div', { class: 'fields fields-inline' }, field(c, `OSD${n}_ENABLE`, { label: 'Screen enabled', help: false }), field(c, `OSD${n}_CHAN_MIN`, { help: false }), field(c, `OSD${n}_CHAN_MAX`, { help: false }));
+    const screenFields = h('div', { class: 'fields fields-inline' }, field(c, `OSD${n}_ENABLE`, { label: 'Screen enabled', help: false }), field(c, `OSD${n}_CHAN_MIN`, { help: false }), field(c, `OSD${n}_CHAN_MAX`, { help: false }),
+      field(c, `OSD${n}_TXT_RES`, { label: 'Text grid', help: false }), field(c, `OSD${n}_FONT`, { label: 'Font index', help: false }));
     this.renderSide(side, items);
 
-    return card('Screen layout', 'osd', 'Drag elements to place them; arrow keys nudge the selected one. Element widths are approximate.',
-      h('div', { class: 'osd-toolbar' }, tabs, resSel),
+    return card('Screen layout', 'osd', 'Drag elements to place them; arrow keys nudge the selected one. The preview draws each element with the real OSD font glyphs and sample values.',
+      h('div', { class: 'osd-toolbar' }, tabs, h('div', { class: 'osd-toolbar-right' }, fontSel, gridSel)),
       screenFields,
       h('div', { class: 'osd-layout' },
-        h('div', { class: 'osd-stage' }, canvas),
+        h('div', { class: 'osd-stage' }, stage, status),
         h('div', { class: 'osd-panel' }, side, filter, list)));
   }
 
   private select(key: string, els: Map<string, HTMLElement>, side: HTMLElement, items: Item[]) {
+    if (this.selected === key) return;
     this.selected = key;
     for (const [k, el] of els) el.classList.toggle('is-selected', k === key);
     this.renderSide(side, items);
@@ -141,12 +226,18 @@ export class OsdPage extends Page {
       h('div', { class: 'fields fields-inline' }, field(this.ctx, it.en, { label: 'Shown', help: false, kind: 'switch' }), field(this.ctx, it.x, { label: 'X', help: false }), field(this.ctx, it.y, { label: 'Y', help: false }))));
   }
 
-  private makeDraggable(el: HTMLElement, it: Item, res: { cols: number; rows: number }, width: number) {
+  /** Anchor positions that keep the element's glyphs on screen. */
+  private clampPos(it: Item, x: number, y: number, res: { cols: number; rows: number }, cellsOf: Map<string, Cell[]>): [number, number] {
+    const b = bounds(cellsOf.get(it.key) ?? []);
+    const maxX = Math.max(-b.x0, res.cols - b.x1), maxY = Math.max(-b.y0, res.rows - b.y1);
+    return [Math.max(-b.x0, Math.min(maxX, x)), Math.max(-b.y0, Math.min(maxY, y))];
+  }
+
+  private makeDraggable(el: HTMLElement, it: Item, res: { cols: number; rows: number }, cellsOf: Map<string, Cell[]>, drag: Map<string, [number, number]>, draw: () => void) {
     el.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       el.setPointerCapture(e.pointerId);
-      const canvas = el.parentElement!;
-      const rect = canvas.getBoundingClientRect();
+      const rect = el.parentElement!.getBoundingClientRect();
       const cw = rect.width / res.cols, ch = rect.height / res.rows;
       const startX = this.ctx.value(it.x) ?? 0, startY = this.ctx.value(it.y) ?? 0;
       const grabX = Math.floor((e.clientX - rect.left) / cw) - startX;
@@ -154,15 +245,16 @@ export class OsdPage extends Page {
       let nx = startX, ny = startY;
       el.classList.add('is-dragging');
       const move = (ev: PointerEvent) => {
-        nx = Math.max(0, Math.min(res.cols - Math.min(width, res.cols), Math.floor((ev.clientX - rect.left) / cw) - grabX));
-        ny = Math.max(0, Math.min(res.rows - 1, Math.floor((ev.clientY - rect.top) / ch) - grabY));
-        el.style.setProperty('--x', String(nx));
-        el.style.setProperty('--y', String(ny));
+        [nx, ny] = this.clampPos(it, Math.floor((ev.clientX - rect.left) / cw) - grabX, Math.floor((ev.clientY - rect.top) / ch) - grabY, res, cellsOf);
+        drag.set(it.key, [nx, ny]);
+        draw();
       };
       const up = () => {
         el.removeEventListener('pointermove', move);
         el.classList.remove('is-dragging');
+        drag.delete(it.key);
         if (nx !== startX || ny !== startY) this.ctx.staging.stageMany([[it.x, nx], [it.y, ny]]);
+        else draw();
       };
       el.addEventListener('pointermove', move);
       el.addEventListener('pointerup', up, { once: true });
@@ -170,13 +262,12 @@ export class OsdPage extends Page {
     });
   }
 
-  private nudge(e: KeyboardEvent, it: Item, res: { cols: number; rows: number }, width: number) {
+  private nudge(e: KeyboardEvent, it: Item, res: { cols: number; rows: number }, cellsOf: Map<string, Cell[]>) {
     const d: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
     const step = d[e.key];
     if (!step) return;
     e.preventDefault();
-    const x = Math.max(0, Math.min(res.cols - Math.min(width, res.cols), (this.ctx.value(it.x) ?? 0) + step[0]));
-    const y = Math.max(0, Math.min(res.rows - 1, (this.ctx.value(it.y) ?? 0) + step[1]));
+    const [x, y] = this.clampPos(it, (this.ctx.value(it.x) ?? 0) + step[0], (this.ctx.value(it.y) ?? 0) + step[1], res, cellsOf);
     this.ctx.staging.stageMany([[it.x, x], [it.y, y]]);
   }
 }
