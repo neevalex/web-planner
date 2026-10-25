@@ -13,6 +13,7 @@ import { ParamsView } from './ui/params/paramsView';
 import { statusView } from './ui/statusView';
 import { messagesView } from './ui/messagesView';
 import { toast } from './ui/toast';
+import { icon, type IconName } from './ui/icons';
 
 const vehicle = new Vehicle();
 (window as unknown as { vehicle: Vehicle }).vehicle = vehicle; // handy in devtools
@@ -24,12 +25,15 @@ const msgBadge = h('span', { class: 'badge', hidden: true });
 const messages = messagesView(vehicle, (n) => { msgBadge.hidden = n === 0; msgBadge.textContent = String(n); });
 const views: Record<ViewKey, HTMLElement> = { params: params.el, status: statusView(vehicle), messages: messages.el };
 
-const navItems: [ViewKey, string, Node?][] = [['params', 'Parameters'], ['status', 'Status'], ['messages', 'Messages', msgBadge]];
+const navItems: [ViewKey, string, IconName, Node?][] = [
+  ['params', 'Parameters', 'params'], ['status', 'Status', 'gauge'], ['messages', 'Messages', 'messages', msgBadge],
+];
 const main = h('main', { class: 'main' });
 const navButtons = new Map<ViewKey, HTMLButtonElement>();
 const nav = h('nav', { class: 'rail', 'aria-label': 'Sections' },
-  navItems.map(([key, label, extra]) => {
-    const b = h('button', { type: 'button', class: 'rail-btn', onclick: () => show(key) }, h('span', null, label), extra ?? null);
+  navItems.map(([key, label, ic, extra]) => {
+    const b = h('button', { type: 'button', class: 'rail-btn', onclick: () => show(key) },
+      h('span', { class: 'rail-icon' }, icon(ic, 22), extra ?? null), h('span', { class: 'rail-label' }, label));
     navButtons.set(key, b);
     return b;
   }));

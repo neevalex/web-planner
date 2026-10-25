@@ -1,10 +1,11 @@
 // Connection dialog: USB (Web Serial) or network (UDP/TCP through the bridge).
-import { SerialTransport, serialSupported } from '../transport/serial';
+import { SerialTransport, serialSupported, serialUnavailableReason } from '../transport/serial';
 import { WebSocketTransport, type NetTarget } from '../transport/websocket';
 import type { Vehicle } from '../vehicle/vehicle';
 import { modal } from './dialog';
 import { h, storage } from './dom';
 import { toast } from './toast';
+import { icon } from './icons';
 
 interface Saved {
   tab: 'usb' | 'net';
@@ -18,21 +19,19 @@ interface Saved {
 
 const BAUDS = [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600, 1500000];
 
-export function openConnectDialog(vehicle: Vehicle) {
+export function openConnectDialog(vehicle: Vehicle, initialTab?: 'usb' | 'net') {
   const s = storage.get<Saved>('connect', {
     tab: serialSupported() ? 'usb' : 'net', baud: 115200,
     bridge: 'ws://localhost:8765', netKind: 'udp-listen', udpPort: 14550, host: '127.0.0.1', port: 5760,
   });
 
-  const tabUsb = h('button', { class: 'seg', role: 'tab', type: 'button' }, 'USB');
-  const tabNet = h('button', { class: 'seg', role: 'tab', type: 'button' }, 'Network');
+  const tabUsb = h('button', { class: 'seg', role: 'tab', type: 'button' }, icon('usb'), 'USB cable');
+  const tabNet = h('button', { class: 'seg', role: 'tab', type: 'button' }, icon('network'), 'Network');
 
   // USB panel
   const baud = h('select', { id: 'c-baud' }, BAUDS.map((b) => h('option', { value: String(b), selected: b === s.baud }, String(b))));
   const usbPanel = h('div', { class: 'form' },
-    serialSupported()
-      ? h('p', { class: 'hint' }, 'Plug the flight controller in, then choose its port. Use 115200 for USB, or the SERIALx_BAUD of a telemetry radio.')
-      : h('p', { class: 'hint hint-warn' }, 'This browser has no Web Serial. Use Chrome or Edge on a computer, or connect over the network.'),
+    serialUsbHint(),
     h('label', { for: 'c-baud' }, 'Baud rate'), baud,
   );
 
@@ -68,7 +67,7 @@ export function openConnectDialog(vehicle: Vehicle) {
   kind.addEventListener('change', syncKind);
   syncKind();
 
-  let tab = s.tab;
+  let tab = initialTab ?? s.tab;
   const setTab = (t: 'usb' | 'net') => {
     tab = t;
     tabUsb.setAttribute('aria-selected', String(t === 'usb'));
@@ -80,7 +79,8 @@ export function openConnectDialog(vehicle: Vehicle) {
   tabNet.addEventListener('click', () => setTab('net'));
   setTab(tab);
 
-  const go = h('button', { class: 'btn btn-primary', type: 'button' }, 'Connect');
+  const goLabel = h('span', null, 'Connect');
+  const go = h('button', { class: 'btn btn-primary', type: 'button' }, icon('plug'), goLabel);
   const m = modal('Connect to vehicle', h('div', null,
     h('div', { class: 'segmented', role: 'tablist' }, tabUsb, tabNet),
     usbPanel, netPanel,
@@ -94,7 +94,7 @@ export function openConnectDialog(vehicle: Vehicle) {
     storage.set('connect', saved);
     let transport;
     if (tab === 'usb') {
-      if (!serialSupported()) { toast('Web Serial isn’t available in this browser.', 'error'); return; }
+      if (!serialSupported()) { toast(serialUnavailableReason()!.text, 'error'); return; }
       transport = new SerialTransport(saved.baud);
     } else {
       const target: NetTarget = saved.netKind === 'udp-listen'
@@ -103,7 +103,7 @@ export function openConnectDialog(vehicle: Vehicle) {
       transport = new WebSocketTransport(saved.bridge, target);
     }
     go.disabled = true;
-    go.textContent = 'Connecting…';
+    goLabel.textContent = 'Connecting…';
     try {
       await vehicle.connect(transport); // serial port picker opens here (needs the click gesture)
       m.close();
@@ -111,7 +111,18 @@ export function openConnectDialog(vehicle: Vehicle) {
       const msg = (e as Error).message;
       if (!/No port selected/i.test(msg)) toast(msg, 'error');
       go.disabled = false;
-      go.textContent = 'Connect';
+      goLabel.textContent = 'Connect';
     }
   });
+}
+
+function serialUsbHint(): HTMLElement {
+  const why = serialUnavailableReason();
+  if (!why) return h('p', { class: 'hint' }, 'Plug the flight controller in, then choose its port. Use 115200 for USB, or the SERIALx_BAUD of a telemetry radio.');
+  return h('div', { class: 'notice notice-warn' },
+    icon('warn'),
+    h('div', null,
+      h('p', null, why.text),
+      why.localUrl ? h('a', { class: 'btn btn-small', href: why.localUrl }, icon('usb', 16), h('span', null, `Open ${why.localUrl.replace(/^https?:\/\//, '')}`)) : null,
+    ));
 }

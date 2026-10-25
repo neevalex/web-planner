@@ -1,52 +1,41 @@
-// Top bar: link, vehicle, mode, arm state, GPS, battery, EKF.
-import { modeTable, QUICK_MODES } from '../vehicle/modes';
+// Top band: link, vehicle, and read-only health indicators.
 import type { VehicleState } from '../vehicle/state';
-import { resultName, type Vehicle } from '../vehicle/vehicle';
-import { MAV_RESULT } from '../mavlink/generated';
-import { confirmDialog } from './dialog';
+import { vehicleTypeName } from '../vehicle/modes';
+import type { Vehicle } from '../vehicle/vehicle';
 import { h } from './dom';
 import { openConnectDialog } from './connect';
-import { toast } from './toast';
+import { icon } from './icons';
 
-const GPS_FIX = ['No GPS', 'No fix', '2D', '3D', 'DGPS', 'RTK float', 'RTK fixed', 'Static', 'PPP'];
+const GPS_FIX = ['No GPS', 'No fix', '2D fix', '3D fix', 'DGPS', 'RTK float', 'RTK fixed', 'Static', 'PPP'];
 
 export function statusBar(vehicle: Vehicle): HTMLElement {
-  const linkDot = h('span', { class: 'dot' });
   const linkText = h('span', { class: 'link-text' });
-  const vehicleText = h('span', { class: 'vehicle-text' });
-  const modeSel = h('select', { class: 'mode-select', 'aria-label': 'Flight mode', disabled: true });
-  const armBtn = h('button', { class: 'arm-btn', type: 'button', disabled: true });
-  const gps = h('span', { class: 'chip' });
-  const batt = h('span', { class: 'chip' });
-  const ekf = h('span', { class: 'chip' });
-  const connectBtn = h('button', { class: 'btn btn-primary connect-btn', type: 'button' });
+  const linkSub = h('span', { class: 'link-sub' });
+  const vehicleName = h('span', { class: 'veh-name' });
+  const vehicleSub = h('span', { class: 'veh-sub' });
 
+  const chip = (name: Parameters<typeof icon>[0]) => {
+    const label = h('span', null);
+    const el = h('span', { class: 'chip' }, icon(name, 16), label);
+    return { el, label };
+  };
+  const mode = h('span', { class: 'chip chip-mode' });
+  const armed = h('span', { class: 'chip chip-armed', hidden: true }, icon('armed', 16), 'Armed');
+  const gps = chip('satellite');
+  const batt = chip('battery');
+  const ekf = chip('ekfOk');
+
+  const connectBtn = h('button', { class: 'btn connect-btn', type: 'button' });
   connectBtn.addEventListener('click', () => {
     if (vehicle.store.state.link === 'disconnected') openConnectDialog(vehicle);
     else void vehicle.disconnect();
   });
 
-  let modeKey = '';
-  modeSel.addEventListener('change', async () => {
-    const mode = Number(modeSel.value);
-    const r = await vehicle.setMode(mode).catch((e: Error) => { toast(e.message, 'error'); return -1; });
-    if (r >= 0 && r !== MAV_RESULT.MAV_RESULT_ACCEPTED) toast(`Mode change ${resultName(r)}`, 'warn');
-  });
-
-  armBtn.addEventListener('click', async () => {
-    const armed = vehicle.store.state.armed;
-    if (!armed && !(await confirmDialog('Arm motors?', 'Props should be off or the vehicle secured. Motors may spin as soon as it arms.', 'Arm', true))) return;
-    const r = await vehicle.arm(!armed).catch((e: Error) => { toast(e.message, 'error'); return -1; });
-    if (r >= 0 && r !== MAV_RESULT.MAV_RESULT_ACCEPTED) toast(`${armed ? 'Disarm' : 'Arm'} ${resultName(r)} — see Messages for the reason`, 'warn');
-  });
-
   const bar = h('header', { class: 'statusbar' },
-    h('div', { class: 'brand' }, 'WebPlanner'),
-    h('div', { class: 'link' }, linkDot, linkText),
-    vehicleText,
-    modeSel,
-    armBtn,
-    h('div', { class: 'chips' }, gps, batt, ekf),
+    h('div', { class: 'brand' }, h('img', { src: `${import.meta.env.BASE_URL}favicon.svg`, alt: '', width: 28, height: 28 }), h('span', null, 'WebPlanner')),
+    h('div', { class: 'link' }, h('span', { class: 'dot' }), h('div', { class: 'stack' }, linkText, linkSub)),
+    h('div', { class: 'veh' }, h('div', { class: 'stack' }, vehicleName, vehicleSub)),
+    h('div', { class: 'chips' }, armed, mode, gps.el, batt.el, ekf.el),
     connectBtn,
   );
 
@@ -54,46 +43,40 @@ export function statusBar(vehicle: Vehicle): HTMLElement {
     const live = s.link === 'connected' || s.link === 'lost';
     bar.dataset.link = s.link;
     linkText.textContent = {
-      disconnected: s.linkError ? `Disconnected — ${s.linkError}` : 'Not connected',
-      connecting: `Opening ${s.linkLabel}…`,
-      waiting: `${s.linkLabel} · waiting for heartbeat`,
-      connected: s.linkLabel,
-      lost: `${s.linkLabel} · link lost`,
+      disconnected: 'Not connected',
+      connecting: 'Connecting…',
+      waiting: 'Waiting for vehicle…',
+      connected: 'Connected',
+      lost: 'Link lost',
     }[s.link];
-    connectBtn.textContent = s.link === 'disconnected' ? 'Connect' : 'Disconnect';
-    vehicleText.textContent = live ? (s.firmware || s.vehicleClass) : '';
+    linkSub.textContent = s.link === 'disconnected' ? (s.linkError ?? 'USB or network') : s.linkLabel;
+    linkSub.title = linkSub.textContent;
 
-    const key = `${s.vehicleClass}`;
-    if (key !== modeKey) {
-      modeKey = key;
-      const table = modeTable(s.vehicleClass);
-      const quick = QUICK_MODES[s.vehicleClass];
-      const rest = Object.keys(table).map(Number).filter((m) => !quick.includes(m));
-      modeSel.replaceChildren(
-        ...quick.map((m) => h('option', { value: String(m) }, table[m])),
-        ...(rest.length ? [h('option', { disabled: true }, '──────')] : []),
-        ...rest.map((m) => h('option', { value: String(m) }, table[m])),
-      );
-    }
-    if (live && !modeSel.querySelector(`option[value="${s.customMode}"]`)) {
-      modeSel.append(h('option', { value: String(s.customMode) }, s.modeName));
-    }
-    if (document.activeElement !== modeSel) modeSel.value = String(s.customMode);
-    modeSel.disabled = s.link !== 'connected';
+    bar.classList.toggle('is-live', live);
+    vehicleName.textContent = live ? (s.firmware || 'ArduPilot') : '';
+    vehicleSub.textContent = live ? `${vehicleTypeName(s.mavType)} · system ${s.sysid}` : '';
 
-    armBtn.disabled = s.link !== 'connected';
-    armBtn.textContent = live ? (s.armed ? 'Armed' : 'Disarmed') : '—';
-    armBtn.classList.toggle('is-armed', live && s.armed);
-    armBtn.title = s.armed ? 'Click to disarm' : 'Click to arm';
+    connectBtn.replaceChildren(
+      icon(s.link === 'disconnected' ? 'plug' : 'unplug'),
+      h('span', null, s.link === 'disconnected' ? 'Connect' : 'Disconnect'),
+    );
+    connectBtn.classList.toggle('btn-accent', s.link === 'disconnected');
 
-    gps.textContent = live ? `${GPS_FIX[s.gpsFix] ?? 'GPS'} · ${s.gpsSats} sats` : 'GPS';
-    gps.dataset.level = !live ? '' : s.gpsFix >= 3 ? 'ok' : s.gpsFix >= 2 ? 'warn' : 'bad';
-    batt.textContent = live && s.batteryVoltage > 0
-      ? `${s.batteryVoltage.toFixed(1)} V${s.batteryRemaining >= 0 ? ` · ${s.batteryRemaining}%` : ''}`
-      : 'Battery';
-    batt.dataset.level = !live || s.batteryVoltage <= 0 ? '' : s.batteryRemaining >= 0 && s.batteryRemaining < 20 ? 'bad' : 'ok';
-    ekf.textContent = 'EKF';
-    ekf.dataset.level = !live || s.ekfOk === null ? '' : s.ekfOk ? 'ok' : 'bad';
+    for (const c of [mode, gps.el, batt.el, ekf.el]) c.hidden = !live;
+    armed.hidden = !(live && s.armed);
+    mode.textContent = s.modeName;
+
+    gps.label.textContent = `${GPS_FIX[s.gpsFix] ?? 'GPS'} · ${s.gpsSats}`;
+    gps.el.dataset.level = s.gpsFix >= 3 ? 'ok' : s.gpsFix >= 2 ? 'warn' : 'bad';
+    gps.el.title = `GPS: ${GPS_FIX[s.gpsFix] ?? s.gpsFix}, ${s.gpsSats} satellites, HDOP ${s.gpsHdop.toFixed(1)}`;
+
+    batt.label.textContent = s.batteryVoltage > 0
+      ? `${s.batteryVoltage.toFixed(1)} V${s.batteryRemaining >= 0 ? ` · ${s.batteryRemaining}%` : ''}` : 'No battery';
+    batt.el.dataset.level = s.batteryVoltage <= 0 ? '' : s.batteryRemaining >= 0 && s.batteryRemaining < 20 ? 'bad' : 'ok';
+
+    ekf.el.replaceChildren(icon(s.ekfOk === false ? 'ekfBad' : 'ekfOk', 16), h('span', null, 'EKF'));
+    ekf.el.dataset.level = s.ekfOk === null ? '' : s.ekfOk ? 'ok' : 'bad';
+    ekf.el.title = s.ekfOk === null ? 'EKF status unknown' : s.ekfOk ? 'EKF healthy' : 'EKF not ready — check the Messages tab';
   });
   return bar;
 }

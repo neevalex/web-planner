@@ -3,6 +3,7 @@ import type { VehicleState } from '../vehicle/state';
 import { vehicleTypeName } from '../vehicle/modes';
 import type { Vehicle } from '../vehicle/vehicle';
 import { h } from './dom';
+import { icon, type IconName } from './icons';
 
 export function statusView(vehicle: Vehicle): HTMLElement {
   const canvas = h('canvas', { class: 'hud', width: 480, height: 480, 'aria-label': 'Attitude indicator', role: 'img' });
@@ -12,15 +13,17 @@ export function statusView(vehicle: Vehicle): HTMLElement {
     cells.set(key, v);
     return h('div', { class: 'tcell' }, h('span', { class: 'tlabel' }, label), v);
   };
+  const card = (title: string, ic: IconName, ...children: HTMLElement[]) =>
+    h('section', { class: 'tcard' }, h('h3', { class: 'tcard-title' }, icon(ic, 18), title), h('div', { class: 'tcells' }, children));
   const grid = h('div', { class: 'tgrid' },
-    cell('roll', 'Roll'), cell('pitch', 'Pitch'), cell('heading', 'Heading'),
-    cell('altRel', 'Altitude (rel)'), cell('gs', 'Ground speed'), cell('climb', 'Climb'),
-    cell('gps', 'GPS'), cell('pos', 'Position'), cell('home', 'Home distance'),
-    cell('volt', 'Battery'), cell('curr', 'Current'), cell('thr', 'Throttle'),
-    cell('type', 'Vehicle'), cell('sys', 'System ID'), cell('link', 'Link'),
+    card('Attitude', 'activity', cell('roll', 'Roll'), cell('pitch', 'Pitch'), cell('heading', 'Heading')),
+    card('Motion', 'gauge', cell('altRel', 'Altitude (rel)'), cell('gs', 'Ground speed'), cell('climb', 'Climb'), cell('thr', 'Throttle')),
+    card('Position', 'satellite', cell('gps', 'GPS'), cell('pos', 'Coordinates'), cell('home', 'Home distance')),
+    card('Power', 'battery', cell('volt', 'Battery'), cell('curr', 'Current')),
+    card('Link', 'cable', cell('type', 'Vehicle'), cell('sys', 'System / component'), cell('link', 'Traffic')),
   );
   const el = h('section', { class: 'view status-view', 'aria-label': 'Status' },
-    h('div', { class: 'hud-wrap' }, canvas), grid);
+    h('div', { class: 'hud-wrap' }, h('div', { class: 'hud-card' }, canvas)), grid);
 
   const set = (k: string, v: string) => { const c = cells.get(k); if (c && c.textContent !== v) c.textContent = v; };
   const deg = (r: number) => (r * 180) / Math.PI;

@@ -3,6 +3,19 @@ import { Transport } from './transport';
 
 export const serialSupported = () => typeof navigator !== 'undefined' && 'serial' in navigator;
 
+/** Why USB isn't available, in words the user can act on — or null when it is. */
+export function serialUnavailableReason(): { text: string; localUrl?: string } | null {
+  if (serialSupported()) return null;
+  if (typeof window !== 'undefined' && !window.isSecureContext) {
+    const { port, pathname } = window.location;
+    return {
+      text: `USB needs a secure page. Chrome turns Web Serial off on plain http:// addresses other than localhost. On the computer the flight controller is plugged into, open the localhost address, or serve WebPlanner over https.`,
+      localUrl: `http://localhost${port ? ':' + port : ''}${pathname}`,
+    };
+  }
+  return { text: 'This browser has no Web Serial. Use Chrome or Edge on a computer, or connect over the network.' };
+}
+
 export class SerialTransport extends Transport {
   private port: SerialPort | null = null;
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;

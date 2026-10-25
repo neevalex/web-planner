@@ -2,18 +2,19 @@
 import type { StatusMessage } from '../vehicle/state';
 import type { Vehicle } from '../vehicle/vehicle';
 import { h } from './dom';
+import { icon } from './icons';
 
 const SEVERITY = ['Emergency', 'Alert', 'Critical', 'Error', 'Warning', 'Notice', 'Info', 'Debug'];
 
 export function messagesView(vehicle: Vehicle, onUnread: (n: number) => void): { el: HTMLElement; markRead: () => void } {
   const list = h('ol', { class: 'msglist', 'aria-live': 'polite' });
-  const empty = h('p', { class: 'msgempty' }, 'Messages from the flight controller appear here — pre-arm failures, calibration results and warnings.');
+  const empty = h('p', { class: 'msgempty' }, icon('messages', 28), 'Messages from the flight controller appear here — pre-arm failures, calibration results and warnings.');
   let rendered: StatusMessage[] = [];
   let unread = 0;
   const el = h('section', { class: 'view messages-view', 'aria-label': 'Messages' },
     h('div', { class: 'msgbar' },
       h('h2', null, 'Messages'),
-      h('button', { class: 'btn btn-small', type: 'button', onclick: () => { vehicle.store.update({ messages: [] }); } }, 'Clear'),
+      h('button', { class: 'btn btn-small', type: 'button', onclick: () => { vehicle.store.update({ messages: [] }); } }, icon('clear', 16), h('span', null, 'Clear')),
     ),
     empty, list);
 
@@ -26,7 +27,7 @@ export function messagesView(vehicle: Vehicle, onUnread: (n: number) => void): {
     for (const m of items) {
       list.prepend(h('li', { class: `msg sev-${m.severity}` },
         h('time', null, new Date(m.time).toLocaleTimeString()),
-        h('span', { class: 'msgsev' }, SEVERITY[m.severity] ?? ''),
+        h('span', { class: 'msgsev' }, m.severity <= 3 ? icon('alert', 14) : m.severity === 4 ? icon('warn', 14) : null, SEVERITY[m.severity] ?? ''),
         h('span', { class: 'msgtext' }, m.text)));
       if (m.severity <= 4 && !el.isConnected) unread++;
     }

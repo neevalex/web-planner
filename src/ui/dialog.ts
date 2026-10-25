@@ -1,11 +1,12 @@
 import { h } from './dom';
+import { icon } from './icons';
 
 /** Modal built on <dialog>. Returns the dialog and a close() that removes it. */
 export function modal(title: string, body: Node, actions: (Node | null)[] = [], opts: { wide?: boolean } = {}) {
   const dlg = h('dialog', { class: `modal${opts.wide ? ' modal-wide' : ''}` },
     h('header', { class: 'modal-head' },
       h('h2', null, title),
-      h('button', { class: 'icon-btn', 'aria-label': 'Close', onclick: () => close() }, '✕'),
+      h('button', { class: 'icon-btn', 'aria-label': 'Close', onclick: () => close() }, icon('close')),
     ),
     h('div', { class: 'modal-body' }, body),
     actions.some(Boolean) ? h('footer', { class: 'modal-foot' }, actions) : null,

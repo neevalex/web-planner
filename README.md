@@ -7,10 +7,10 @@ Runs in the browser. USB via Web Serial (Chrome/Edge on desktop), UDP/TCP throug
 ## What works now (milestone 1)
 
 - **Connect** over USB (Web Serial, any baud) or the network (UDP listen, UDP to address, TCP) through the bridge.
-- **Status bar**: link state, firmware version, flight mode selector, arm/disarm (with confirmation), GPS, battery, EKF health.
+- **Status bar** (read-only): link state, firmware version, current mode, armed warning, GPS, battery, EKF health.
 - **Parameter editor**
   - Full download with gap filling — completes even on a lossy link (tested at 20% simulated loss).
-  - Grouped by prefix (`ATC`, `BATT`, `COMPASS`, `SERVO`…), natural sort (`SERVO2` before `SERVO10`).
+  - Grouped by subsystem with readable names (Attitude control `ATC`, Battery monitor `BATT`, Compass `COMPASS`…), section headers in the full list, natural sort (`SERVO2` before `SERVO10`).
   - Search across names, display names and descriptions (`/` focuses search).
   - ArduPilot metadata for Copter, Plane and Rover: description, units, range, increment, enums, bitmasks, reboot-required, read-only.
   - Editors by kind: dropdown for true enums, number input + presets menu for suggested values, checkbox list for bitmasks, ↑/↓ steps by the documented increment.
@@ -27,7 +27,7 @@ npm install
 npm run dev          # http://localhost:5173
 ```
 
-USB: open in Chrome or Edge, **Connect → USB**, pick the port.
+USB: open **http://localhost:5173** in Chrome or Edge on the computer the flight controller is plugged into, then **Connect → USB cable**. Chrome only allows Web Serial on secure pages — `https://` or `http://localhost` — so a LAN address like `http://192.168.1.10:5173` won't offer USB. For a LAN device, connect over the network instead, or serve WebPlanner over https.
 
 Network: start the bridge, then **Connect → Network**.
 

@@ -8,6 +8,9 @@ import { confirmDialog, modal } from '../dialog';
 import { clear, debounce, download, h, pickFile, storage } from '../dom';
 import { toast } from '../toast';
 import { parseParamFile, writeParamFile } from './paramFile';
+import { familyOf, GENERAL, groupName } from './groups';
+import { icon } from '../icons';
+import { openConnectDialog } from '../connect';
 
 interface Row {
   el: HTMLElement;
@@ -23,11 +26,8 @@ const isStrictEnum = (p: Param, m?: ParamMeta) => !!m?.v && !m.b && !m.r && isIn
 const ALL = '__all__';
 const MODIFIED = '__modified__';
 
-const familyOf = (name: string) => {
-  const head = name.includes('_') ? name.slice(0, name.indexOf('_')) : name;
-  return head.replace(/\d+$/, '') || head;
-};
 const natural = (a: string, b: string) => a.localeCompare(b, 'en', { numeric: true });
+const byGroupName = (a: string, b: string) => (a === GENERAL ? 1 : 0) - (b === GENERAL ? 1 : 0) || groupName(a).localeCompare(groupName(b)) || natural(a, b);
 
 export class ParamsView {
   readonly el: HTMLElement;
@@ -40,6 +40,21 @@ export class ParamsView {
   private query = '';
   private standardOnly = storage.get('params.standardOnly', false);
   private writing = false;
+  private singles = new Set<string>();
+  private singlesFor = -1;
+
+  /** Group key for a parameter, folding one-parameter prefixes into General. */
+  private fam(name: string): string {
+    const pm = this.vehicle.params.params;
+    if (this.singlesFor !== pm.size) {
+      const counts = new Map<string, number>();
+      for (const n of pm.keys()) { const f = familyOf(n); counts.set(f, (counts.get(f) ?? 0) + 1); }
+      this.singles = new Set([...counts].filter(([, c]) => c === 1).map(([f]) => f));
+      this.singlesFor = pm.size;
+    }
+    const f = familyOf(name);
+    return this.singles.has(f) ? GENERAL : f;
+  }
 
   private groupList = h('nav', { class: 'pgroups', 'aria-label': 'Parameter groups' });
   private groupSelectHost = h('div', { class: 'pgroup-select-host' });
@@ -54,24 +69,26 @@ export class ParamsView {
 
   constructor(private vehicle: Vehicle) {
     this.search = h('input', {
-      class: 'psearch', type: 'search', placeholder: 'Search name or description', 'aria-label': 'Search parameters',
+      class: 'psearch-input', type: 'search', placeholder: 'Search name or description', 'aria-label': 'Search parameters',
       spellcheck: false, autocomplete: 'off',
       oninput: () => { this.query = this.search.value.trim(); this.renderSoon(); },
     });
-    const stdToggle = h('label', { class: 'toggle' },
+    const stdToggle = h('label', { class: 'switch', title: 'Hide parameters ArduPilot marks as advanced' },
       h('input', { type: 'checkbox', checked: this.standardOnly, onchange: (e: Event) => {
         this.standardOnly = (e.target as HTMLInputElement).checked;
         storage.set('params.standardOnly', this.standardOnly);
         this.render();
       } }),
-      'Hide advanced');
+      h('span', { class: 'switch-track' }), 'Hide advanced');
 
     const toolbar = h('div', { class: 'ptoolbar' },
-      this.groupSelectHost, this.search, stdToggle, this.countText,
+      this.groupSelectHost,
+      h('label', { class: 'psearch' }, icon('search'), this.search, h('kbd', { class: 'kbd' }, '/')),
+      stdToggle, this.countText,
       h('div', { class: 'ptools' },
-        h('button', { class: 'btn', type: 'button', onclick: () => this.refreshAll() }, 'Refresh'),
-        h('button', { class: 'btn', type: 'button', onclick: () => this.loadFile() }, 'Load file…'),
-        h('button', { class: 'btn', type: 'button', onclick: () => this.saveFile() }, 'Save file'),
+        h('button', { class: 'btn', type: 'button', title: 'Read all parameters from the vehicle again', onclick: () => this.refreshAll() }, icon('refresh'), h('span', null, 'Refresh')),
+        h('button', { class: 'btn', type: 'button', title: 'Compare a .param file with the vehicle', onclick: () => this.loadFile() }, icon('folder'), h('span', null, 'Load file')),
+        h('button', { class: 'btn', type: 'button', title: 'Download all parameters as a .param file', onclick: () => this.saveFile() }, icon('download'), h('span', null, 'Save file')),
       ),
     );
 
@@ -109,6 +126,7 @@ export class ParamsView {
       this.progress.hidden = false;
       this.progress.style.setProperty('--pct', `${(100 * p.received) / p.total}%`);
       this.progress.textContent = `Reading parameters… ${p.received} of ${p.total}`;
+      this.progress.prepend(icon('download', 16));
     } else if (!p.done) {
       this.progress.hidden = !this.vehicle.connected;
       this.progress.style.setProperty('--pct', '0%');
@@ -148,70 +166,111 @@ export class ParamsView {
         return words.every((w) => hay.includes(w));
       }
       if (this.group === MODIFIED) return this.pending.has(p.name);
-      if (this.group !== ALL) return familyOf(p.name) === this.group;
+      if (this.group !== ALL) return this.fam(p.name) === this.group;
       return true;
-    }).sort((a, b) => natural(a.name, b.name));
+    }).sort((a, b) => this.grouped() ? byGroupName(this.fam(a.name), this.fam(b.name)) || natural(a.name, b.name) : natural(a.name, b.name));
   }
+
+  /** The "all" view shows section headers per group. */
+  private grouped() { return this.group === ALL && !this.query; }
 
   private render() {
     this.renderGroups();
     const pm = this.vehicle.params;
+    this.el.classList.toggle('is-empty', pm.params.size === 0);
     if (pm.params.size === 0) {
       clear(this.list);
       this.countText.textContent = '';
       this.empty.hidden = false;
       this.empty.replaceChildren(
-        this.vehicle.store.state.link === 'disconnected'
-          ? h('div', null, h('h3', null, 'Connect a vehicle to edit its parameters'),
-              h('p', null, 'You can still open a .param file after connecting to compare it with the vehicle.'))
-          : h('div', null, h('h3', null, 'Waiting for parameters from the vehicle')),
+        this.vehicle.store.state.link === 'disconnected' ? this.hero()
+          : h('div', { class: 'pwait' }, h('div', { class: 'spinner' }), h('h3', null, 'Reading parameters from the vehicle')),
       );
       return;
     }
     const visible = this.visibleParams();
     this.empty.hidden = visible.length > 0;
     if (!visible.length) {
-      this.empty.replaceChildren(h('div', null, h('h3', null, this.query ? `Nothing matches “${this.query}”` : 'No parameters here'),
+      this.empty.replaceChildren(h('div', { class: 'pnone' }, icon('search', 28), h('h3', null, this.query ? `Nothing matches “${this.query}”` : 'No parameters here'),
         this.query ? h('p', null, 'Search covers names, display names and descriptions.') : null));
     }
     this.countText.textContent = this.query
       ? `${visible.length} match${visible.length === 1 ? '' : 'es'}`
       : `${visible.length} of ${pm.params.size}`;
-    this.list.replaceChildren(...visible.map((p) => this.rowFor(p).el));
+    if (!this.grouped()) {
+      this.list.replaceChildren(...visible.map((p) => this.rowFor(p).el));
+      return;
+    }
+    const nodes: HTMLElement[] = [];
+    let fam = '';
+    for (const p of visible) {
+      const f = this.fam(p.name);
+      if (f !== fam) {
+        fam = f;
+        const ff = f;
+        nodes.push(h('div', { class: 'phead', role: 'presentation' },
+          h('button', { type: 'button', class: 'phead-btn', title: `Show only ${groupName(ff)}`, onclick: () => this.selectGroup(ff) },
+            h('span', { class: 'phead-name' }, groupName(f)), groupName(f) !== f && f !== GENERAL ? h('span', { class: 'phead-code' }, f) : null)));
+      }
+      nodes.push(this.rowFor(p).el);
+    }
+    this.list.replaceChildren(...nodes);
+  }
+
+  private selectGroup(key: string) {
+    this.group = key; storage.set('params.group', key);
+    if (this.query) { this.query = ''; this.search.value = ''; }
+    this.render();
+    this.list.parentElement!.scrollTop = 0;
+  }
+
+  private hero(): HTMLElement {
+    return h('div', { class: 'hero' },
+      h('div', { class: 'hero-art', 'aria-hidden': 'true' }, heroArt()),
+      h('h2', null, 'Connect a flight controller'),
+      h('p', null, 'Read every parameter with ArduPilot’s own documentation, edit them safely, and compare against saved .param files.'),
+      h('div', { class: 'hero-actions' },
+        h('button', { class: 'btn btn-accent btn-lg', type: 'button', onclick: () => openConnectDialog(this.vehicle, 'usb') }, icon('usb'), h('span', null, 'Connect with USB')),
+        h('button', { class: 'btn btn-lg', type: 'button', onclick: () => openConnectDialog(this.vehicle, 'net') }, icon('network'), h('span', null, 'Connect over network')),
+      ),
+      h('ul', { class: 'hero-points' },
+        h('li', null, icon('check', 16), 'Copter, Plane and Rover'),
+        h('li', null, icon('check', 16), 'Changes are staged and verified before they count'),
+        h('li', null, icon('check', 16), 'Works offline once loaded'),
+      ),
+    );
   }
 
   private renderGroups() {
     const counts = new Map<string, number>();
     for (const name of this.vehicle.params.params.keys()) {
-      const f = familyOf(name);
+      const f = this.fam(name);
       counts.set(f, (counts.get(f) ?? 0) + 1);
     }
     if (this.group !== ALL && this.group !== MODIFIED && counts.size && !counts.has(this.group)) this.group = ALL;
-    const item = (key: string, label: string, count: number, extra = '') =>
+    const item = (key: string, label: string, code: string | null, count: number, extra = '', ic?: Parameters<typeof icon>[0]) =>
       h('button', {
         type: 'button', class: `pgroup${extra}`, 'aria-current': this.group === key && !this.query ? 'true' : null,
-        onclick: () => {
-          this.group = key; storage.set('params.group', key);
-          if (this.query) { this.query = ''; this.search.value = ''; }
-          this.render();
-          this.list.scrollTop = 0;
-        },
-      }, h('span', { class: 'pgroup-name' }, label), h('span', { class: 'pgroup-count' }, String(count)));
+        onclick: () => this.selectGroup(key),
+      },
+      ic ? icon(ic, 16) : null,
+      h('span', { class: 'pgroup-name' }, label, code ? h('span', { class: 'pgroup-code' }, code) : null),
+      h('span', { class: 'pgroup-count' }, String(count)));
 
-    const families = [...counts.keys()].sort(natural);
+    const families = [...counts.keys()].sort(byGroupName);
     const select = h('select', { class: 'pgroup-select', 'aria-label': 'Parameter group', onchange: (e: Event) => {
       this.group = (e.target as HTMLSelectElement).value; storage.set('params.group', this.group); this.render();
     } },
       h('option', { value: ALL, selected: this.group === ALL }, `All parameters (${this.vehicle.params.params.size})`),
       this.pending.size ? h('option', { value: MODIFIED, selected: this.group === MODIFIED }, `Unsaved changes (${this.pending.size})`) : null,
-      families.map((f) => h('option', { value: f, selected: this.group === f }, `${f} (${counts.get(f)})`)),
+      families.map((f) => h('option', { value: f, selected: this.group === f }, `${groupName(f)} (${counts.get(f)})`)),
     );
     clear(this.groupSelectHost, select);
     clear(this.groupList,
-      item(ALL, 'All parameters', this.vehicle.params.params.size),
-      this.pending.size ? item(MODIFIED, 'Unsaved changes', this.pending.size, ' pgroup-modified') : null,
+      item(ALL, 'All parameters', null, this.vehicle.params.params.size, ' pgroup-top', 'params'),
+      this.pending.size ? item(MODIFIED, 'Unsaved changes', null, this.pending.size, ' pgroup-top pgroup-modified', 'write') : null,
       h('div', { class: 'pgroup-sep' }),
-      families.map((f) => item(f, f, counts.get(f)!)),
+      families.map((f) => item(f, groupName(f), groupName(f) !== f && f !== GENERAL ? f : null, counts.get(f)!)),
     );
   }
 
@@ -223,7 +282,7 @@ export class ParamsView {
     const presets = m?.v && !isStrictEnum(p, m) && !m.b && !m.ro ? this.makePresets(p, m, editor as HTMLInputElement) : null;
     const current = h('span', { class: 'pcurrent' });
     const nameBtn = h('button', { type: 'button', class: 'pname', 'aria-expanded': 'false', title: 'Show details' },
-      h('span', { class: 'pid' }, p.name),
+      h('span', { class: 'pid' }, icon('chevron', 14), p.name),
       h('span', { class: 'pdisplay' }, m?.n ?? (Object.keys(this.meta).length ? 'Undocumented' : '')),
     );
     const el = h('div', { class: 'prow', role: 'listitem', dataset: { name: p.name } },
@@ -232,7 +291,7 @@ export class ParamsView {
       h('span', { class: 'punits' }, prettyUnit(m?.u)),
       h('p', { class: 'pdesc' }, m?.d ?? ''),
     );
-    if (m?.rb) el.append(h('span', { class: 'pflag', title: 'Takes effect after a reboot' }, 'Reboot'));
+    if (m?.rb) el.append(h('span', { class: 'pflag', title: 'Takes effect after a reboot' }, icon('power', 13), 'Reboot'));
     row = { el, editor, presets, current, details: null };
     const r = row;
     nameBtn.addEventListener('click', () => this.toggleDetails(p.name, r, nameBtn));
@@ -393,10 +452,10 @@ export class ParamsView {
       h('dl', { class: 'pfacts' }, facts.map(([k, v]) => [h('dt', null, k), h('dd', null, v)])),
       bits, values,
       h('div', { class: 'pdetails-actions' },
-        this.pending.has(name) ? h('button', { class: 'btn btn-small', type: 'button', onclick: () => { this.pending.delete(name); this.afterStage(name); } }, 'Undo change') : null,
+        this.pending.has(name) ? h('button', { class: 'btn btn-small', type: 'button', onclick: () => { this.pending.delete(name); this.afterStage(name); } }, icon('undo', 16), h('span', null, 'Undo change')) : null,
         h('button', { class: 'btn btn-small', type: 'button', onclick: async () => {
           try { await this.vehicle.params.refresh(name); toast(`${name} re-read from vehicle`, 'ok', 1500); } catch { toast(`No reply for ${name}`, 'warn'); }
-        } }, 'Re-read'),
+        } }, icon('reread', 16), h('span', null, 'Re-read')),
       ),
     );
   }
@@ -416,12 +475,13 @@ export class ParamsView {
       return r && Number.isFinite(v) && (v < r[0] || v > r[1]);
     });
     clear(this.tray,
+      h('span', { class: 'tray-dot', 'aria-hidden': 'true' }),
       h('div', { class: 'tray-text' },
         h('strong', null, `${n} unsaved change${n === 1 ? '' : 's'}`),
-        invalid.length ? h('span', { class: 'tray-warn' }, `${invalid.length} not a valid number`) :
-          outOfRange.length ? h('span', { class: 'tray-warn' }, `${outOfRange.length} outside documented range`) : null,
+        invalid.length ? h('span', { class: 'tray-warn' }, icon('warn', 14), `${invalid.length} not a valid number`) :
+          outOfRange.length ? h('span', { class: 'tray-warn' }, icon('warn', 14), `${outOfRange.length} outside documented range`) : null,
       ),
-      h('button', { class: 'btn', type: 'button', onclick: () => { this.group = MODIFIED; this.query = ''; this.search.value = ''; this.render(); } }, 'Review'),
+      h('button', { class: 'btn', type: 'button', onclick: () => { this.group = MODIFIED; this.query = ''; this.search.value = ''; this.render(); } }, icon('review'), h('span', null, 'Review')),
       h('button', { class: 'btn', type: 'button', disabled: this.writing, onclick: async () => {
         if (await confirmDialog('Discard changes?', `${n} staged change${n === 1 ? '' : 's'} will be dropped. Nothing has been written to the vehicle.`, 'Discard', true)) {
           const names = [...this.pending.keys()];
@@ -429,9 +489,9 @@ export class ParamsView {
           for (const nm of names) this.afterStage(nm);
           if (this.group === MODIFIED) { this.group = ALL; this.render(); }
         }
-      } }, 'Discard'),
+      } }, icon('undo'), h('span', null, 'Discard')),
       h('button', { class: 'btn btn-write', type: 'button', disabled: this.writing || invalid.length > 0 || !this.vehicle.connected,
-        onclick: () => this.writePending() }, this.writing ? 'Writing…' : `Write ${n} to vehicle`),
+        onclick: () => this.writePending() }, icon('write'), h('span', { class: 'btn-write-label' }, this.writing ? 'Writing…' : [`Write ${n}`, h('span', { class: 'hide-sm' }, ' to vehicle')])),
     );
   }
 
@@ -445,8 +505,8 @@ export class ParamsView {
     this.writing = true;
     this.renderTray();
     const failed = await this.vehicle.params.setMany(entries, (done, total) => {
-      const btn = this.tray.querySelector('.btn-write');
-      if (btn) btn.textContent = `Writing ${done} of ${total}…`;
+      const label = this.tray.querySelector('.btn-write-label');
+      if (label) label.textContent = `Writing ${done} of ${total}…`;
     });
     this.writing = false;
     const failedNames = new Set(failed.map((f) => f.name));
@@ -469,6 +529,7 @@ export class ParamsView {
     this.rebootBar.hidden = this.rebootNeeded.size === 0;
     if (!this.rebootNeeded.size) return;
     clear(this.rebootBar,
+      icon('info'),
       h('span', null, `Reboot the flight controller to apply ${[...this.rebootNeeded].slice(0, 4).join(', ')}${this.rebootNeeded.size > 4 ? ` and ${this.rebootNeeded.size - 4} more` : ''}.`),
       h('button', { class: 'btn btn-small', type: 'button', onclick: async () => {
         if (this.vehicle.store.state.armed) { toast('Disarm before rebooting', 'warn'); return; }
@@ -478,8 +539,8 @@ export class ParamsView {
         this.renderReboot();
         toast('Rebooting…', 'info');
         this.awaitRebootAndReload();
-      } }, 'Reboot now'),
-      h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Dismiss', onclick: () => { this.rebootNeeded.clear(); this.renderReboot(); } }, '✕'),
+      } }, icon('power', 16), h('span', null, 'Reboot now')),
+      h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Dismiss', onclick: () => { this.rebootNeeded.clear(); this.renderReboot(); } }, icon('close')),
     );
   }
 
@@ -576,7 +637,26 @@ export class ParamsView {
         for (const d of diffs) if (boxes.get(d.name)!.checked) { this.pending.set(d.name, d.value); n++; }
         m.close();
         if (n) { this.group = MODIFIED; this.query = ''; this.search.value = ''; this.render(); this.renderTray(); toast(`Staged ${n} change${n === 1 ? '' : 's'} from ${fileName}`, 'ok'); }
-      } }, 'Stage selected') : null,
+      } }, icon('diff'), h('span', null, 'Stage selected')) : null,
     ], { wide: true });
   }
+}
+
+function heroArt(): SVGElement {
+  // A quadcopter seen from above, drawn with the app's ink and amber tokens.
+  const ns = 'http://www.w3.org/2000/svg';
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `<svg xmlns="${ns}" viewBox="0 0 240 160" width="240" height="160">
+    <g fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round">
+      <path d="M78 46 L162 114 M162 46 L78 114"/>
+    </g>
+    <g fill="none" stroke="currentColor" stroke-width="3" opacity=".35">
+      <circle cx="70" cy="40" r="30"/><circle cx="170" cy="40" r="30"/>
+      <circle cx="70" cy="120" r="30"/><circle cx="170" cy="120" r="30"/>
+    </g>
+    <g fill="currentColor"><circle cx="70" cy="40" r="7"/><circle cx="170" cy="40" r="7"/><circle cx="70" cy="120" r="7"/><circle cx="170" cy="120" r="7"/></g>
+    <rect x="98" y="62" width="44" height="36" rx="8" fill="var(--amber)"/>
+    <path d="M120 70 L128 82 H112 Z" fill="var(--ink)"/>
+  </svg>`;
+  return wrap.firstElementChild as SVGElement;
 }
